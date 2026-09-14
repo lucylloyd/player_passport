@@ -477,11 +477,11 @@ const TOKENS = {
 const SCALE_PROFICIENCY = [{
   value: 1,
   label: "Unmet",
-  short: "Unmet",
+  short: "unmet",
   color: "#8FA3B3"
 }, {
   value: 2,
-  label: "Loose",
+  label: "Loosely",
   short: "Loose",
   color: "#3E8BD6"
 }, {
@@ -492,7 +492,7 @@ const SCALE_PROFICIENCY = [{
 }, {
   value: 4,
   label: "Controlled",
-  short: "Contr",
+  short: "Control",
   color: "#F2A93B"
 }];
 const SCALE_OUTCOME = [{
@@ -1515,50 +1515,50 @@ const PREVIEW_ATTRIBUTES = [{
 }, {
   id: "pa16",
   squad_id: "preview-squad",
-  name: "Aerial",
+  name: "Front stick pickup",
   category: "technical",
   sort_order: 34
 }, {
   id: "pa17",
   squad_id: "preview-squad",
-  name: "Carry",
+  name: "Lift pass pickup",
   category: "technical",
   sort_order: 35
 }, {
   id: "pa18",
   squad_id: "preview-squad",
-  name: "Tackle",
+  name: "Sweep",
   category: "technical",
   sort_order: 36
 }, {
   id: "pa19",
   squad_id: "preview-squad",
-  name: "Shots on target",
+  name: "Deflection on target",
   category: "outcomes",
   sort_order: 41
 }, {
   id: "pa20",
   squad_id: "preview-squad",
-  name: "Saves",
+  name: "Interception",
   category: "outcomes",
   sort_order: 42
 }, {
   id: "pa21",
   squad_id: "preview-squad",
-  name: "Assists",
+  name: "Top D strike",
   category: "outcomes",
   sort_order: 43
 }, {
   id: "pa22",
   squad_id: "preview-squad",
-  name: "Converted PCs",
+  name: "Wide distribution",
   category: "outcomes",
   sort_order: 44
 }];
 function makePreviewPlayers() {
   return [{
     id: "pp1",
-    name: "Preview Player One",
+    name: "Freya MacIntyre",
     age: 15,
     squad_id: "preview-squad",
     squadName: "Demo Squad",
@@ -1599,7 +1599,7 @@ function makePreviewPlayers() {
     feedback: []
   }, {
     id: "pp2",
-    name: "Preview Player Two",
+    name: "Joshua Davies",
     age: 16,
     squad_id: "preview-squad",
     squadName: "Demo Squad",
