@@ -481,23 +481,23 @@ const TOKENS = {
 ========================================================= */
 const SCALE_PROFICIENCY = [{
   value: 1,
-  label: "Unmet",
-  short: "unmet",
+  label: "Introducing",
+  short: "Intro",
   color: "#8FA3B3"
 }, {
   value: 2,
-  label: "Loosely",
-  short: "Loose",
+  label: "Developing",
+  short: "Devlp",
   color: "#3E8BD6"
 }, {
   value: 3,
-  label: "Managing",
-  short: "Manag",
+  label: "Competent",
+  short: "Compt",
   color: "#2FB6A3"
 }, {
   value: 4,
-  label: "Controlled",
-  short: "Control",
+  label: "Expert",
+  short: "Expert",
   color: "#F2A93B"
 }];
 const SCALE_OUTCOME = [{
@@ -1094,7 +1094,7 @@ function SquadDetail({
 }) {
   const roster = players.filter(p => p.squad_id === squad.id);
   const grouped = groupByCategory(attributes);
-    const [infoAttribute, setInfoAttribute] = useState(null);
+  const [infoAttribute, setInfoAttribute] = useState(null);
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
     title: `${squad.name} squad`,
     subtitle: `${roster.length} players`,
@@ -1153,7 +1153,7 @@ function SquadDetail({
       ...sectionLabelStyle,
       marginBottom: 4
     }
-  }, "Squad"), /*#__PURE__*/React.createElement("p", {
+  }, "Roster"), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11,
       color: "#8FA0AC",
@@ -1184,7 +1184,7 @@ function SquadDetail({
   }, "age ", p.age), /*#__PURE__*/React.createElement(CategoryMiniBars, {
     player: p,
     attributes: attributes
- })))))), /*#__PURE__*/React.createElement(AttributeInfoModal, {
+  })))))), /*#__PURE__*/React.createElement(AttributeInfoModal, {
     attribute: infoAttribute,
     onClose: () => setInfoAttribute(null)
   }));
@@ -1593,50 +1593,50 @@ const PREVIEW_ATTRIBUTES = [{
 }, {
   id: "pa16",
   squad_id: "preview-squad",
-  name: "Front stick pickup",
+  name: "Aerial",
   category: "technical",
   sort_order: 34
 }, {
   id: "pa17",
   squad_id: "preview-squad",
-  name: "Lift pass pickup",
+  name: "Carry",
   category: "technical",
   sort_order: 35
 }, {
   id: "pa18",
   squad_id: "preview-squad",
-  name: "Sweep",
+  name: "Tackle",
   category: "technical",
   sort_order: 36
 }, {
   id: "pa19",
   squad_id: "preview-squad",
-  name: "Deflection on target",
+  name: "Shots on target",
   category: "outcomes",
   sort_order: 41
 }, {
   id: "pa20",
   squad_id: "preview-squad",
-  name: "Interception",
+  name: "Saves",
   category: "outcomes",
   sort_order: 42
 }, {
   id: "pa21",
   squad_id: "preview-squad",
-  name: "Top D strike",
+  name: "Assists",
   category: "outcomes",
   sort_order: 43
 }, {
   id: "pa22",
   squad_id: "preview-squad",
-  name: "Wide distribution",
+  name: "Converted PCs",
   category: "outcomes",
   sort_order: 44
 }];
 function makePreviewPlayers() {
   return [{
     id: "pp1",
-    name: "Freya MacIntyre",
+    name: "Preview Player One",
     age: 15,
     squad_id: "preview-squad",
     squadName: "Demo Squad",
@@ -1677,7 +1677,7 @@ function makePreviewPlayers() {
     feedback: []
   }, {
     id: "pp2",
-    name: "Joshua Davies",
+    name: "Preview Player Two",
     age: 16,
     squad_id: "preview-squad",
     squadName: "Demo Squad",
