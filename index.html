@@ -504,12 +504,12 @@ const SCALE_OUTCOME = [{
   value: 1,
   label: "Missing",
   short: "Miss",
-  color: "#E8604C"
+  color: "#8FA3B3"
 }, {
   value: 2,
   label: "Attempting",
   short: "Attpt",
-  color: "#F2A93B"
+  color: "#3E8BD6"
 }, {
   value: 3,
   label: "Achieving",
@@ -562,14 +562,6 @@ function groupByCategory(attrs) {
   }));
 }
 
-// The 4 categories shown as mini bars on squad roster cards (Physical omitted by request)
-const ROSTER_CATEGORIES = ["attitude", "tactical", "technical", "outcomes"];
-const ROSTER_CATEGORY_SHORT = {
-attitude: "Att",
-  tactical: "Tac",
-  technical: "Tech",
-  outcomes: "Out"
-};
 function fmtDate(iso) {
   return new Date(iso).toLocaleDateString("en-GB", {
     day: "2-digit",
@@ -699,45 +691,46 @@ function SegmentBar({
 }
 
 /* Small per-category colour chips used on squad roster cards */
-function CategoryMiniBars({
+// One segment per attribute, in the same order as the attribute chips above.
+// Each segment takes the colour of that attribute's own score.
+function AttributeSegmentBar({
   player,
   attributes
 }) {
+  const ordered = groupByCategory(attributes).flatMap(g => g.items);
+  if (!ordered.length) return null;
+  const scoredCount = ordered.filter(a => player.scores[a.id] && player.scores[a.id].value).length;
   return /*#__PURE__*/React.createElement("div", {
     style: {
-      display: "flex",
-      gap: 6,
       marginTop: 8
     }
-  }, ROSTER_CATEGORIES.map(cat => {
-    const catAttrs = attributes.filter(a => a.category === cat);
-    const scale = scaleForCategory(cat);
-    const vals = catAttrs.map(a => player.scores[a.id] ? player.scores[a.id].value : 0).filter(Boolean);
-    const avg = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
-    const lvl = levelFor(avg, scale);
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 2,
+      height: 10,
+      borderRadius: 5,
+      overflow: "hidden"
+    }
+  }, ordered.map(a => {
+    const value = player.scores[a.id] ? player.scores[a.id].value : 0;
+    const lvl = levelFor(value, scaleForCategory(a.category));
     return /*#__PURE__*/React.createElement("div", {
-      key: cat,
+      key: a.id,
+      title: `${a.name}: ${lvl.label}`,
       style: {
-        flex: 1,
-        textAlign: "center"
-      },
-      title: `${CATEGORY_LABELS[cat]}: ${lvl.label}`
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        height: 8,
-        borderRadius: 2,
-        background: avg ? lvl.color : "rgba(11,61,98,0.12)"
+        flex: "1 1 0",
+        background: value ? lvl.color : "rgba(11,61,98,0.12)"
       }
-    }), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 9,
-        marginTop: 3,
-        color: "#6B7C8C",
-        fontWeight: 700,
-        letterSpacing: "0.02em"
-      }
-    }, ROSTER_CATEGORY_SHORT[cat]));
-  }));
+    });
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      marginTop: 5,
+      color: "#4A5B68",
+      fontWeight: 600
+    }
+  }, `${scoredCount} of ${ordered.length} scored`));
 }
 
 /* Position + role tags shown on a player's roster tile */
@@ -1195,7 +1188,7 @@ function SquadDetail({
       color: "#8FA0AC",
       margin: "0 0 8px"
     }
-  }, "Bars: Attitude · Tactical · Technical · Outcomes"), /*#__PURE__*/React.createElement("div", {
+  }, "One segment per skill, in the order listed above"), /*#__PURE__*/React.createElement("div", {
     className: "roster-grid"
   }, roster.map(p => /*#__PURE__*/React.createElement("button", {
     key: p.id,
@@ -1214,7 +1207,7 @@ function SquadDetail({
     }
    }, p.name), /*#__PURE__*/React.createElement(PlayerTags, {
     player: p
-  }), /*#__PURE__*/React.createElement(CategoryMiniBars, {
+  }), /*#__PURE__*/React.createElement(AttributeSegmentBar, {
     player: p,
     attributes: attributes
  })))))), /*#__PURE__*/React.createElement(AttributeInfoModal, {
