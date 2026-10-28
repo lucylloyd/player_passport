@@ -864,6 +864,7 @@ function LoginScreen() {
     style: {
       minHeight: "100vh",
       display: "flex",
+      flexDirection: "column",
       alignItems: "center",
       justifyContent: "center",
       background: "#EDF1F5",
@@ -951,7 +952,7 @@ function LoginScreen() {
       fontSize: 12,
       marginTop: 8
     }
-  }, errorMsg))));
+  }, errorMsg))), /*#__PURE__*/React.createElement(AppFooter, null));
 }
 
 /* ---------------- Landing screen ---------------- */
@@ -1518,6 +1519,23 @@ function CenteredMessage({
   }, children));
 }
 
+/* ---------------- Footer ---------------- */
+
+function AppFooter() {
+  return /*#__PURE__*/React.createElement("footer", {
+    style: {
+      padding: "16px 16px 24px",
+      textAlign: "center",
+      fontSize: 12
+    }
+  }, /*#__PURE__*/React.createElement("a", {
+    href: "privacy/",
+    style: {
+      color: "#6B7C8C"
+    }
+  }, "Privacy"));
+}
+
 /* =========================================================
    PREVIEW MODE mock data
 ========================================================= */
@@ -1926,6 +1944,8 @@ function Dashboard({
       width: "100%",
       maxWidth: 448,
       minHeight: "100vh",
+      display: "flex",
+      flexDirection: "column",
       background: TOKENS.chalk,
       boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1)"
     }
@@ -1952,7 +1972,11 @@ function Dashboard({
     onAddFeedback: handleAddFeedback,
     onSignOut: onSignOut,
     saving: saving
-  })));
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: "auto"
+    }
+  }, /*#__PURE__*/React.createElement(AppFooter, null))));
 }
 
 /* ---------------- Root app ---------------- */
