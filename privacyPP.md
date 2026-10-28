@@ -107,7 +107,7 @@ Under UK data protection law you have the right to:
 
 The quickest route is usually to ask your club, as it controls the records. You can also contact us directly and we will work with the club to respond, normally within one month.
 
-If you are unhappy with how your information has been handled, you can complain to the Information Commissioner's Office (ICO) at ico.org.uk or on 0303 123 1113. We would appreciate the chance to put things right first.
+If you are unhappy with how your information has been handled, you can complain to the Information Commissioner's Office (ICO) at [ico.org.uk](https://ico.org.uk) or on 0303 123 1113. We would appreciate the chance to put things right first.
 
 ## Changes and contact
 
@@ -115,4 +115,4 @@ We will update this notice if the app changes how it uses information, and show 
 
 Questions or requests: privacy@progresssquad.co.uk
 
-Last updated: 30th October 2026
+Last updated: 28th October 2026
