@@ -837,29 +837,157 @@ function AttributeInfoModal({
 
 /* ---------------- Login screen ---------------- */
 
+// Remember who we sent a code to, so a reload (e.g. after switching to the
+// mail app on a phone) still shows the code box. Best effort only.
+const PENDING_KEY = "pp_pending_signin";
+const PENDING_MAX_AGE = 60 * 60 * 1000;
+function loadPendingEmail() {
+  try {
+    const p = JSON.parse(localStorage.getItem(PENDING_KEY) || "null");
+    return p && Date.now() - p.at < PENDING_MAX_AGE ? p.email : "";
+  } catch {
+    return "";
+  }
+}
+function savePendingEmail(email) {
+  try {
+    if (email) {
+      localStorage.setItem(PENDING_KEY, JSON.stringify({
+        email,
+        at: Date.now()
+      }));
+    } else {
+      localStorage.removeItem(PENDING_KEY);
+    }
+  } catch {}
+}
+
+// A magic link that was already used (often by an email security scanner)
+// or has expired comes back as #error=...&error_code=otp_expired.
+function readLinkError() {
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  if (!params.get("error") && !params.get("error_code")) return "";
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+  return params.get("error_code") === "otp_expired" ? "That sign-in link has expired or was already used." : "That sign-in link didn't work.";
+}
+function friendlySendError(message) {
+  if (/signup|not allowed|not found/i.test(message)) return "That email isn't set up as a coach yet. Ask your admin to add you first.";
+  if (/security purposes|rate limit|too many/i.test(message)) return "Please wait a minute before asking for another code.";
+  return message;
+}
 function LoginScreen() {
-  const [email, setEmail] = useState("");
-  const [status, setStatus] = useState("idle"); // idle | sending | sent | error
+  const [linkError] = useState(readLinkError);
+  const [email, setEmail] = useState(loadPendingEmail);
+  const [status, setStatus] = useState(() => loadPendingEmail() ? "sent" : "idle"); // idle | sending | sent | error
   const [errorMsg, setErrorMsg] = useState("");
-  const sendLink = async () => {
-    if (!email.trim()) return;
-    setStatus("sending");
+  const [code, setCode] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const [codeError, setCodeError] = useState(() => linkError && linkError + " Enter the 6-digit code from the same email instead, or send a new one.");
+  const [resent, setResent] = useState(false);
+  const requestCode = async () => {
     const {
       error
     } = await sb.auth.signInWithOtp({
       email: email.trim(),
       options: {
-        emailRedirectTo: window.location.href,
+        emailRedirectTo: window.location.origin + window.location.pathname,
         shouldCreateUser: false // only existing coach accounts can sign in — no self-signup
       }
     });
+    return error;
+  };
+  const sendLink = async () => {
+    if (!email.trim()) return;
+    setStatus("sending");
+    const error = await requestCode();
     if (error) {
       setStatus("error");
-      setErrorMsg(/signup|not allowed|not found/i.test(error.message) ? "That email isn't set up as a coach yet. Ask your admin to add you first." : error.message);
+      setErrorMsg(friendlySendError(error.message));
     } else {
+      savePendingEmail(email.trim());
       setStatus("sent");
     }
   };
+  const resendCode = async () => {
+    setCode("");
+    setCodeError("");
+    setResent(false);
+    setVerifying(true);
+    const error = await requestCode();
+    setVerifying(false);
+    if (error) {
+      setCodeError(friendlySendError(error.message));
+    } else {
+      savePendingEmail(email.trim());
+      setResent(true);
+    }
+  };
+  const verifyCode = async () => {
+    const token = code.replace(/\D/g, "");
+    if (token.length < 6 || verifying) return;
+    setVerifying(true);
+    setCodeError("");
+    setResent(false);
+    const {
+      error
+    } = await sb.auth.verifyOtp({
+      email: email.trim(),
+      token,
+      type: "email"
+    });
+    setVerifying(false);
+    if (error) {
+      setCodeError(/rate limit|too many|security purposes/i.test(error.message) ? "Too many attempts. Please wait a minute and try again." : "That code didn't work. It may have a typo or have expired. Check the latest email, or send a new code.");
+    } else {
+      // onAuthStateChange in the root app picks up the new session
+      savePendingEmail("");
+    }
+  };
+  const startOver = () => {
+    savePendingEmail("");
+    setCode("");
+    setCodeError("");
+    setResent(false);
+    setStatus("idle");
+  };
+  const inputStyle = {
+    width: "100%",
+    fontSize: 14,
+    borderRadius: 8,
+    border: "1px solid rgba(11,61,98,0.2)",
+    padding: "10px 12px",
+    marginBottom: 10
+  };
+  const primaryButton = busy => ({
+    width: "100%",
+    padding: "10px 0",
+    borderRadius: 8,
+    border: "none",
+    background: TOKENS.turf,
+    color: TOKENS.chalk,
+    fontWeight: 600,
+    fontSize: 14,
+    opacity: busy ? 0.6 : 1
+  });
+  const linkButton = {
+    background: "none",
+    border: "none",
+    padding: 0,
+    color: TOKENS.turf,
+    fontWeight: 600,
+    fontSize: 13,
+    textDecoration: "underline"
+  };
+  const errorText = msg => /*#__PURE__*/React.createElement("p", {
+    role: "alert",
+    style: {
+      color: TOKENS.coral,
+      fontSize: 12,
+      marginTop: 8,
+      marginBottom: 0,
+      lineHeight: 1.5
+    }
+  }, msg);
   return /*#__PURE__*/React.createElement("div", {
     style: {
       minHeight: "100vh",
@@ -894,14 +1022,15 @@ function LoginScreen() {
       marginTop: 0,
       marginBottom: 20
     }
-  }, "Sign in with your coach email to see your squads."), status === "sent" ? /*#__PURE__*/React.createElement("div", {
+  }, "Sign in with your coach email to see your squads."), status === "sent" ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 10,
       alignItems: "flex-start",
       background: "rgba(47,182,163,0.12)",
       borderRadius: 10,
-      padding: 14
+      padding: 14,
+      marginBottom: 16
     }
   }, /*#__PURE__*/React.createElement(Mail, {
     size: 18,
@@ -917,42 +1046,68 @@ function LoginScreen() {
       color: TOKENS.turf,
       lineHeight: 1.5
     }
-  }, "Check ", /*#__PURE__*/React.createElement("strong", null, email), " for a sign-in link, then open it on this device.")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("input", {
+  }, resent ? "New code sent to " : "We've emailed ", /*#__PURE__*/React.createElement("strong", null, email), ". Enter the code below, or open the link in the email on this device.")), /*#__PURE__*/React.createElement("label", {
+    htmlFor: "signin-code",
+    style: {
+      display: "block",
+      fontSize: 13,
+      fontWeight: 600,
+      color: TOKENS.turf,
+      marginBottom: 6
+    }
+  }, "Enter the 6-digit code from your email"), /*#__PURE__*/React.createElement("input", {
+    id: "signin-code",
+    type: "text",
+    inputMode: "numeric",
+    autoComplete: "one-time-code",
+    maxLength: 10,
+    value: code,
+    onChange: e => setCode(e.target.value.replace(/\D/g, "")),
+    onKeyDown: e => e.key === "Enter" && verifyCode(),
+    placeholder: "123456",
+    autoFocus: true,
+    style: {
+      ...inputStyle,
+      fontSize: 20,
+      letterSpacing: "0.3em",
+      textAlign: "center"
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: verifyCode,
+    disabled: verifying || code.length < 6,
+    className: "press",
+    style: primaryButton(verifying || code.length < 6)
+  }, verifying ? "Checking…" : "Sign in"), codeError && errorText(codeError), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      gap: 12,
+      marginTop: 16
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: resendCode,
+    disabled: verifying,
+    style: linkButton
+  }, "Send a new code"), /*#__PURE__*/React.createElement("button", {
+    onClick: startOver,
+    style: {
+      ...linkButton,
+      color: "#6B7C8C",
+      fontWeight: 500
+    }
+  }, "Use a different email"))) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("input", {
     type: "email",
     value: email,
     onChange: e => setEmail(e.target.value),
     placeholder: "you@club.com",
-    style: {
-      width: "100%",
-      fontSize: 14,
-      borderRadius: 8,
-      border: "1px solid rgba(11,61,98,0.2)",
-      padding: "10px 12px",
-      marginBottom: 10
-    },
+    style: inputStyle,
     onKeyDown: e => e.key === "Enter" && sendLink()
   }), /*#__PURE__*/React.createElement("button", {
     onClick: sendLink,
     disabled: status === "sending",
     className: "press",
-    style: {
-      width: "100%",
-      padding: "10px 0",
-      borderRadius: 8,
-      border: "none",
-      background: TOKENS.turf,
-      color: TOKENS.chalk,
-      fontWeight: 600,
-      fontSize: 14,
-      opacity: status === "sending" ? 0.6 : 1
-    }
-  }, status === "sending" ? "Sending…" : "Send sign-in link"), status === "error" && /*#__PURE__*/React.createElement("p", {
-    style: {
-      color: "#E8604C",
-      fontSize: 12,
-      marginTop: 8
-    }
-  }, errorMsg))), /*#__PURE__*/React.createElement(AppFooter, null));
+    style: primaryButton(status === "sending")
+  }, status === "sending" ? "Sending…" : "Email me a sign-in code"), status === "error" && errorText(errorMsg), linkError && status === "idle" && errorText(linkError + " Enter your email to get a new code."))), /*#__PURE__*/React.createElement(AppFooter, null));
 }
 
 /* ---------------- Landing screen ---------------- */
