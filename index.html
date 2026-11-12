@@ -478,43 +478,60 @@ const TOKENS = {
    SCORING SCALES
    Different categories use different scoring vocabularies.
    Every skill/attribute picks up its scale from its category.
+   `color` is the badge/bar colour; `text` is the colour of any
+   words shown on top of it (chosen so they stay readable).
 ========================================================= */
+
+/* Rename the score levels here. This is the only place the
+   names are set; every badge, button and tooltip uses them. */
+const SCORE_LEVEL_LABELS = {
+  1: "Not yet",
+  2: "Developing",
+  3: "Secure",
+  4: "Strong",
+  5: "Excellent"
+};
 const SCALE_PROFICIENCY = [{
   value: 1,
-  label: "Unmet",
-  short: "unmet",
-  color: "#8FA3B3"
+  label: SCORE_LEVEL_LABELS[1],
+  color: "#A3B4C2",
+  text: TOKENS.turf
 }, {
   value: 2,
-  label: "OK",
-  short: "OK",
-  color: "#3E8BD6"
+  label: SCORE_LEVEL_LABELS[2],
+  color: "#2F6FB5",
+  text: "#fff"
 }, {
   value: 3,
-  label: "Better",
-  short: "Bet",
-  color: "#2FB6A3"
+  label: SCORE_LEVEL_LABELS[3],
+  color: "#1F7A6D",
+  text: "#fff"
 }, {
   value: 4,
-  label: "Best",
-  short: "Best",
-  color: "#F2A93B"
+  label: SCORE_LEVEL_LABELS[4],
+  color: "#2E7D32",
+  text: "#fff"
+}, {
+  value: 5,
+  label: SCORE_LEVEL_LABELS[5],
+  color: "#F2A93B",
+  text: TOKENS.turf
 }];
 const SCALE_OUTCOME = [{
   value: 1,
   label: "Missing",
-  short: "Miss",
-  color: "#8FA3B3"
+  color: "#A3B4C2",
+  text: TOKENS.turf
 }, {
   value: 2,
   label: "Attempting",
-  short: "Attpt",
-  color: "#3E8BD6"
+  color: "#2F6FB5",
+  text: "#fff"
 }, {
   value: 3,
   label: "Achieving",
-  short: "Achv",
-  color: "#2FB6A3"
+  color: "#1F7A6D",
+  text: "#fff"
 }];
 const SCALES = {
   proficiency: SCALE_PROFICIENCY,
@@ -530,8 +547,8 @@ const CATEGORY_SCALE_KEY = {
 const UNSCORED = {
   value: 0,
   label: "Not yet scored",
-  short: "—",
-  color: "#C9D6E2"
+  color: "#C9D6E2",
+  text: TOKENS.turf
 };
 function scaleForCategory(category) {
   return SCALES[CATEGORY_SCALE_KEY[category]] || SCALE_PROFICIENCY;
@@ -1481,7 +1498,7 @@ function PlayerDetail({
           borderRadius: 999,
           flexShrink: 0,
           background: lvl.color,
-          color: "#fff"
+          color: lvl.text
         }
       }, lvl.label)), isEditing && /*#__PURE__*/React.createElement("div", {
         style: {
@@ -1500,7 +1517,7 @@ function PlayerDetail({
         style: {
           display: "grid",
           gridTemplateColumns: `repeat(${scale.length}, 1fr)`,
-          gap: 8
+          gap: 6
         }
       }, scale.map(l => /*#__PURE__*/React.createElement("button", {
         key: l.value,
@@ -1520,7 +1537,7 @@ function PlayerDetail({
           gap: 4,
           border: `1px solid ${l.value === rec.value ? l.color : "rgba(11,61,98,0.15)"}`,
           background: l.value === rec.value ? l.color : "#fff",
-          color: l.value === rec.value ? "#fff" : TOKENS.turf,
+          color: l.value === rec.value ? l.text : TOKENS.turf,
           opacity: saving ? 0.6 : 1
         }
       }, l.value === rec.value && /*#__PURE__*/React.createElement(Check, {
@@ -1857,7 +1874,7 @@ function makePreviewPlayers() {
         history: []
       },
       pa13: {
-        value: 4,
+        value: 5,
         history: []
       },
       pa14: {
