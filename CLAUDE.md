@@ -51,11 +51,13 @@ All tables are in the `public` schema, and all IDs are `uuid`.
 | `scores` | `id`, `player_id`, `attribute_id`, `value` (int), `scored_by` (coach uuid), `scored_at` | Only new rows are added; old scores aren't changed. |
 | `feedback` | `id`, `player_id`, `note`, `coach_id`, `created_at` | |
 | `coach_squads` | `coach_id`, `squad_id` | Links coaches (`auth.users.id`) to squads. **This table controls who sees what.** |
-| `profiles` | `id`, `email`, `role` | One row per user. `is_admin()` is assumed to read `role` here: check the function definition before relying on it. |
+| `profiles` | `id`, `email`, `role` | One row per user. A user is an admin when `role = 'admin'`. |
 
 ## RLS policies
 
 The pattern used throughout: **`is_admin()` OR the row belongs to a squad listed in `coach_squads` for `auth.uid()`**.
+
+`is_admin()` is a `security definer` SQL function: `select exists (select 1 from profiles where id = auth.uid() and role = 'admin')`. To make someone an admin, set their `profiles.role` to `'admin'` in the SQL Editor. Coaches can't change their own role, because `profiles` has no UPDATE policy.
 
 | Table | Command | Who |
 |---|---|---|
