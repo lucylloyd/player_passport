@@ -440,11 +440,6 @@ const Clock = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.
 }), /*#__PURE__*/React.createElement("path", {
   d: "M12 6v6l4 2"
 }));
-const ShieldHalf = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.createElement("path", {
-  d: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"
-}), /*#__PURE__*/React.createElement("path", {
-  d: "M12 22V2"
-}));
 const LogOut = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.createElement("path", {
   d: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"
 }), /*#__PURE__*/React.createElement("path", {
@@ -590,6 +585,12 @@ const DRILL_LIMITS = {
   maxResults: 8,
   maxPoints: 100
 };
+// Today's date on this device, as YYYY-MM-DD (what a date input uses).
+function todayLocalDate() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
 function drillMaxTotal(config) {
   const top = Math.max(0, ...config.results.map(r => r.points));
   return top * config.attempts;
@@ -1224,6 +1225,48 @@ function LoginScreen() {
 
 /* ---------------- Landing screen ---------------- */
 
+/* A full-width link card, used for the admin options on the landing screen */
+function MenuCard({
+  title,
+  subtitle,
+  onClick
+}) {
+  return /*#__PURE__*/React.createElement("button", {
+    onClick: onClick,
+    className: "press",
+    style: {
+      ...cardBase,
+      width: "100%",
+      minHeight: 48,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      padding: "12px 16px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: "left"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 14,
+      color: TOKENS.turf
+    }
+  }, title), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      marginTop: 2,
+      color: "#6B7C8C"
+    }
+  }, subtitle)), /*#__PURE__*/React.createElement(ChevronRight, {
+    size: 18,
+    style: {
+      color: TOKENS.amber
+    }
+  }));
+}
+
 function Landing({
   tab,
   setTab,
@@ -1233,7 +1276,9 @@ function Landing({
   onOpenPlayer,
   onSignOut,
   canSetupDrills,
-  onOpenDrillSetup
+  onOpenDrillSetup,
+  canManageAttributes,
+  onOpenAttributes
 }) {
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
     title: "PLAYER PASSPORT",
@@ -1271,40 +1316,21 @@ function Landing({
     size: 16
   }) : /*#__PURE__*/React.createElement(UserRound, {
     size: 16
-  }), t === "squad" ? "By squad" : "By player"))), canSetupDrills && /*#__PURE__*/React.createElement("button", {
-    onClick: onOpenDrillSetup,
-    className: "press",
+  }), t === "squad" ? "By squad" : "By player"))), (canSetupDrills || canManageAttributes) && /*#__PURE__*/React.createElement("div", {
     style: {
-      ...cardBase,
-      width: "100%",
-      minHeight: 48,
       display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      padding: "12px 16px",
+      flexDirection: "column",
+      gap: 8,
       marginBottom: 20
     }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      textAlign: "left"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontWeight: 600,
-      fontSize: 14,
-      color: TOKENS.turf
-    }
-  }, "Drill setup"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      marginTop: 2,
-      color: "#6B7C8C"
-    }
-  }, "Create and edit drills for your squads")), /*#__PURE__*/React.createElement(ChevronRight, {
-    size: 18,
-    style: {
-      color: TOKENS.amber
-    }
+  }, canSetupDrills && /*#__PURE__*/React.createElement(MenuCard, {
+    title: "Drill setup",
+    subtitle: "Create and edit drills for your squads",
+    onClick: onOpenDrillSetup
+  }), canManageAttributes && /*#__PURE__*/React.createElement(MenuCard, {
+    title: "Attributes",
+    subtitle: "Archive attributes you no longer score",
+    onClick: onOpenAttributes
   })), squads.length === 0 && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 13,
@@ -1828,30 +1854,93 @@ function PlayerDetail({
       marginTop: 2,
       color: TOKENS.turf
     }
-  }, f.note)))))), /*#__PURE__*/React.createElement("div", {
+  }, f.note))))))));
+}
+
+/* ---------------- Attributes (admins): archive and restore ---------------- */
+
+function AttributeManager({
+  squads,
+  attributesBySquad,
+  onBack,
+  onSignOut,
+  onArchive,
+  saving
+}) {
+  const archive = a => {
+    if (!window.confirm(`Archive "${a.name}"?\n\nIt will be hidden from scoring and the squad overview. Its scores are kept, and you can restore it here at any time.`)) return;
+    onArchive(a, true);
+  };
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
+    title: "ATTRIBUTES",
+    subtitle: "Archive attributes you no longer score",
+    onBack: onBack,
+    onSignOut: onSignOut
+  }), /*#__PURE__*/React.createElement("div", {
     style: {
-      borderRadius: 12,
       padding: 16,
       display: "flex",
-      gap: 12,
-      alignItems: "flex-start",
-      background: "rgba(242,169,59,0.12)"
+      flexDirection: "column",
+      gap: 24
     }
-  }, /*#__PURE__*/React.createElement(ShieldHalf, {
-    size: 18,
+  }, /*#__PURE__*/React.createElement("p", {
     style: {
-      color: TOKENS.amber,
-      flexShrink: 0,
-      marginTop: 2
+      fontSize: 13,
+      color: "#4A5B68",
+      margin: 0,
+      lineHeight: 1.5
     }
-  }), /*#__PURE__*/React.createElement("p", {
+  }, "Archiving hides an attribute everywhere coaches score, and from the squad overview. Its scores stay in the database, and restoring it brings everything back."), squads.map(sq => /*#__PURE__*/React.createElement("div", {
+    key: sq.id
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      ...sectionLabelStyle,
+      marginBottom: 8
+    }
+  }, sq.name), /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...cardBase,
+      overflow: "hidden"
+    }
+  }, (attributesBySquad[sq.id] || []).map((a, i) => /*#__PURE__*/React.createElement("div", {
+    key: a.id,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 12,
+      padding: "8px 12px 8px 16px",
+      borderTop: i === 0 ? "none" : "1px solid rgba(11,61,98,0.08)",
+      background: a.archived_at ? "#F4F7FA" : "#fff"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "truncate",
+    style: {
+      fontWeight: 600,
+      fontSize: 14,
+      color: a.archived_at ? "#6B7C8C" : TOKENS.turf
+    }
+  }, a.name), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
-      lineHeight: 1.6,
-      margin: 0,
-      color: TOKENS.turf
+      marginTop: 2,
+      color: "#6B7C8C"
     }
-  }, "Focus next: attributes still sitting at the lower end of their scale are the priority for next session. Every score you set here is saved straight to your Supabase database, scoped to what your coach account can see."))));
+  }, CATEGORY_LABELS[a.category] || a.category || "No category", a.archived_at ? ` · archived ${fmtDate(a.archived_at)}` : "")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => a.archived_at ? onArchive(a, false) : archive(a),
+    disabled: saving,
+    className: "press",
+    style: {
+      ...secondaryButtonStyle,
+      flexShrink: 0,
+      opacity: saving ? 0.6 : 1
+    },
+    "aria-label": `${a.archived_at ? "Restore" : "Archive"} ${a.name}`
+  }, a.archived_at ? "Restore" : "Archive"))))))));
 }
 
 /* ---------------- Drill setup list (admins and squad leads) ---------------- */
@@ -1866,6 +1955,7 @@ function DrillSetup({
   onEdit
 }) {
   const attributeName = (squadId, id) => ((attributesBySquad[squadId] || []).find(a => a.id === id) || {}).name || "";
+  const isArchived = (squadId, id) => !!((attributesBySquad[squadId] || []).find(a => a.id === id) || {}).archived_at;
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
     title: "DRILL SETUP",
     subtitle: "Create and edit drills for your squads",
@@ -1936,7 +2026,7 @@ function DrillSetup({
         marginTop: 2,
         color: "#6B7C8C"
       }
-    }, attributeName(sq.id, d.attribute_id), " · ", d.config.attempts, " attempts")), /*#__PURE__*/React.createElement(ChevronRight, {
+    }, attributeName(sq.id, d.attribute_id), " · ", d.config.attempts, " attempts", isArchived(sq.id, d.attribute_id) ? " · attribute archived, so it can't be run" : "")), /*#__PURE__*/React.createElement(ChevronRight, {
       size: 18,
       style: {
         color: "#B9C6D1",
@@ -2437,6 +2527,10 @@ function DrillRunner({
   const [actions, setActions] = useState([]);
   const [tags, setTags] = useState([]);
   const [note, setNote] = useState("");
+  const today = todayLocalDate();
+  const [sessionDate, setSessionDate] = useState(today);
+  // Date inputs give YYYY-MM-DD, so comparing as text compares dates.
+  const dateProblem = !sessionDate ? "Choose the session date." : sessionDate > today ? "The session date can't be in the future." : null;
   const attempts = actions.filter(a => a.type === "attempt");
   const retakes = actions.length - attempts.length;
   const done = attempts.length >= config.attempts;
@@ -2665,6 +2759,27 @@ function DrillRunner({
       size: 14
     }), t);
   }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    htmlFor: "drill-session-date",
+    style: {
+      ...sectionLabelStyle,
+      display: "block",
+      marginBottom: 8
+    }
+  }, "Session date"), /*#__PURE__*/React.createElement("input", {
+    id: "drill-session-date",
+    type: "date",
+    value: sessionDate,
+    max: today,
+    onChange: e => setSessionDate(e.target.value),
+    style: inputStyle
+  }), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      margin: "6px 0 0",
+      color: dateProblem ? "#B3261E" : "#6B7C8C"
+    },
+    role: dateProblem ? "alert" : undefined
+  }, dateProblem || "Change this if you're entering a past session, e.g. from paper.")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     htmlFor: "drill-note",
     style: {
       ...sectionLabelStyle,
@@ -2673,6 +2788,7 @@ function DrillRunner({
     }
   }, "Note (optional)"), /*#__PURE__*/React.createElement("textarea", {
     id: "drill-note",
+    placeholder: "Anything worth remembering from this session",
     value: note,
     onChange: e => setNote(e.target.value),
     rows: 3,
@@ -2690,7 +2806,7 @@ function DrillRunner({
       color: "#6B7C8C",
       margin: 0
     }
-  }, "Saving also sets ", attributeName, " to ", /*#__PURE__*/React.createElement("strong", null, lvl.label), " on ", player.name, "'s passport."), /*#__PURE__*/React.createElement("button", {
+  }, "Saving also sets ", attributeName, " to ", /*#__PURE__*/React.createElement("strong", null, lvl.label), " on ", player.name, "'s passport", sessionDate && sessionDate !== today && !dateProblem ? `, dated ${fmtDate(`${sessionDate}T12:00:00`)}` : "", "."), /*#__PURE__*/React.createElement("button", {
     onClick: () => onSave({
       drill_id: drill.id,
       player_id: player.id,
@@ -2699,13 +2815,14 @@ function DrillRunner({
       tags,
       note: note.trim() || null,
       total,
-      level
+      level,
+      session_date: sessionDate
     }),
-    disabled: saving,
+    disabled: saving || !!dateProblem,
     className: "press",
     style: {
       ...primaryButtonStyle,
-      opacity: saving ? 0.6 : 1
+      opacity: saving || dateProblem ? 0.5 : 1
     }
   }, saving ? "Saving…" : "Save result"), /*#__PURE__*/React.createElement("button", {
     onClick: undo,
@@ -3011,10 +3128,16 @@ function Dashboard({
       const squadIds = squadList.map(s => s.id);
       let attributeRows = [];
       if (squadIds.length) {
-        const {
+        const fetchAttributes = columns => sb.from("attributes").select(columns).in("squad_id", squadIds).order("sort_order");
+        let {
           data,
           error
-        } = await sb.from("attributes").select("id, squad_id, name, category, sort_order, description").in("squad_id", squadIds).order("sort_order");
+        } = await fetchAttributes("id, squad_id, name, category, sort_order, description, archived_at");
+        // archived_at only exists once the archive migration has run.
+        if (error) ({
+          data,
+          error
+        } = await fetchAttributes("id, squad_id, name, category, sort_order, description"));
         if (error) throw error;
         attributeRows = data || [];
       }
@@ -3223,7 +3346,12 @@ function Dashboard({
       attempts: entry.attempts,
       retakes: entry.retakes,
       tags: entry.tags,
-      note: entry.note
+      note: entry.note,
+      // Today: leave it to the database ("now"). An earlier session:
+      // midday on that date, so no time zone can shift it to another day.
+      ...(entry.session_date !== todayLocalDate() && {
+        recorded_at: `${entry.session_date}T12:00:00`
+      })
     });
     setSaving(false);
     if (error) {
@@ -3231,6 +3359,31 @@ function Dashboard({
       return;
     }
     setScreen("player");
+    await loadData();
+  };
+  const handleArchiveAttribute = async (attribute, archive) => {
+    const archived_at = archive ? new Date().toISOString() : null;
+    if (previewMode) {
+      setAttributesBySquad(prev => ({
+        ...prev,
+        [attribute.squad_id]: prev[attribute.squad_id].map(a => a.id === attribute.id ? {
+          ...a,
+          archived_at
+        } : a)
+      }));
+      return;
+    }
+    setSaving(true);
+    const {
+      error
+    } = await sb.from("attributes").update({
+      archived_at
+    }).eq("id", attribute.id);
+    setSaving(false);
+    if (error) {
+      alert(`Couldn't ${archive ? "archive" : "restore"} that attribute: ` + error.message);
+      return;
+    }
     await loadData();
   };
   const openSquad = sq => {
@@ -3249,6 +3402,9 @@ function Dashboard({
   const editableSquads = access.isAdmin ? squads : squads.filter(s => access.leadSquadIds.includes(s.id));
   const runningDrill = drills.find(d => d.id === runningDrillId);
   const attributeNameFor = (squadId, id) => ((attributesBySquad[squadId] || []).find(a => a.id === id) || {}).name || "";
+  // Archived attributes are hidden everywhere except the admin Attributes screen.
+  const activeAttributesBySquad = Object.fromEntries(Object.entries(attributesBySquad).map(([squadId, attrs]) => [squadId, attrs.filter(a => !a.archived_at)]));
+  const activeAttributeIds = new Set(Object.values(activeAttributesBySquad).flat().map(a => a.id));
   return /*#__PURE__*/React.createElement("div", {
     style: {
       minHeight: "100vh",
@@ -3276,7 +3432,16 @@ function Dashboard({
     onOpenPlayer: id => openPlayer(id, "landing"),
     onSignOut: onSignOut,
     canSetupDrills: editableSquads.length > 0,
-    onOpenDrillSetup: () => setScreen("drills")
+    onOpenDrillSetup: () => setScreen("drills"),
+    canManageAttributes: access.isAdmin,
+    onOpenAttributes: () => setScreen("attributes")
+  }), screen === "attributes" && /*#__PURE__*/React.createElement(AttributeManager, {
+    squads: squads,
+    attributesBySquad: attributesBySquad,
+    onBack: () => setScreen("landing"),
+    onSignOut: onSignOut,
+    onArchive: handleArchiveAttribute,
+    saving: saving
   }), screen === "drills" && /*#__PURE__*/React.createElement(DrillSetup, {
     squads: editableSquads,
     attributesBySquad: attributesBySquad,
@@ -3295,7 +3460,7 @@ function Dashboard({
   }), screen === "drillEdit" && /*#__PURE__*/React.createElement(DrillEditor, {
     key: editingDrill ? editingDrill.id : `new-${newDrillSquadId}`,
     squads: editableSquads,
-    attributesBySquad: attributesBySquad,
+    attributesBySquad: activeAttributesBySquad,
     drill: editingDrill,
     initialSquadId: newDrillSquadId,
     onCancel: () => setScreen("drills"),
@@ -3314,19 +3479,19 @@ function Dashboard({
   }), screen === "squad" && selectedSquad && /*#__PURE__*/React.createElement(SquadDetail, {
     squad: selectedSquad,
     players: players,
-    attributes: attributesBySquad[selectedSquad.id] || [],
+    attributes: activeAttributesBySquad[selectedSquad.id] || [],
     onBack: () => setScreen("landing"),
     onOpenPlayer: id => openPlayer(id, "squad"),
     onSignOut: onSignOut
   }), screen === "player" && selectedPlayer && /*#__PURE__*/React.createElement(PlayerDetail, {
     player: selectedPlayer,
-    attributes: attributesBySquad[selectedPlayer.squad_id] || [],
+    attributes: activeAttributesBySquad[selectedPlayer.squad_id] || [],
     onBack: () => setScreen(cameFrom === "squad" ? "squad" : "landing"),
     onScoreChange: handleScoreChange,
     onAddFeedback: handleAddFeedback,
     onSignOut: onSignOut,
     saving: saving,
-    drills: drills.filter(d => d.squad_id === selectedPlayer.squad_id),
+    drills: drills.filter(d => d.squad_id === selectedPlayer.squad_id && activeAttributeIds.has(d.attribute_id)),
     onRunDrill: id => {
       setRunningDrillId(id);
       setScreen("runDrill");
