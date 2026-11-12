@@ -475,9 +475,8 @@ const TOKENS = {
 };
 
 /* =========================================================
-   SCORING SCALES
-   Different categories use different scoring vocabularies.
-   Every skill/attribute picks up its scale from its category.
+   SCORING SCALE
+   Every attribute, in every category, is scored on these levels.
    `color` is the badge/bar colour; `text` is the colour of any
    words shown on top of it (chosen so they stay readable).
 ========================================================= */
@@ -491,7 +490,7 @@ const SCORE_LEVEL_LABELS = {
   4: "Strong",
   5: "Excellent"
 };
-const SCALE_PROFICIENCY = [{
+const SCORE_SCALE = [{
   value: 1,
   label: SCORE_LEVEL_LABELS[1],
   color: "#A3B4C2",
@@ -517,53 +516,22 @@ const SCALE_PROFICIENCY = [{
   color: "#F2A93B",
   text: TOKENS.turf
 }];
-const SCALE_OUTCOME = [{
-  value: 1,
-  label: "Missing",
-  color: "#A3B4C2",
-  text: TOKENS.turf
-}, {
-  value: 2,
-  label: "Attempting",
-  color: "#2F6FB5",
-  text: "#fff"
-}, {
-  value: 3,
-  label: "Achieving",
-  color: "#1F7A6D",
-  text: "#fff"
-}];
-const SCALES = {
-  proficiency: SCALE_PROFICIENCY,
-  outcome: SCALE_OUTCOME
-};
-const CATEGORY_SCALE_KEY = {
-  attitude: "proficiency",
-  tactical: "proficiency",
-  technical: "proficiency",
-  physical: "proficiency",
-  outcomes: "outcome"
-};
 const UNSCORED = {
   value: 0,
   label: "Not yet scored",
   color: "#C9D6E2",
   text: TOKENS.turf
 };
-function scaleForCategory(category) {
-  return SCALES[CATEGORY_SCALE_KEY[category]] || SCALE_PROFICIENCY;
-}
-function levelFor(value, scale) {
+function levelFor(value) {
   if (!value) return UNSCORED;
-  return (scale || SCALE_PROFICIENCY).find(l => l.value === value) || UNSCORED;
+  return SCORE_SCALE.find(l => l.value === value) || UNSCORED;
 }
-const CATEGORY_ORDER = ["attitude", "tactical", "technical", "physical", "outcomes"];
+const CATEGORY_ORDER = ["attitude", "tactical", "technical", "physical"];
 const CATEGORY_LABELS = {
   attitude: "Attitude",
   tactical: "Tactical",
   technical: "Technical",
-  physical: "Physical",
-  outcomes: "Outcomes"
+  physical: "Physical"
 };
 function groupByCategory(attrs) {
   const groups = {};
@@ -685,18 +653,16 @@ function TopBar({
   }))));
 }
 function SegmentBar({
-  value,
-  scale
+  value
 }) {
-  const s = scale || SCALE_PROFICIENCY;
-  const color = levelFor(value, s).color;
+  const color = levelFor(value).color;
   return /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 4
     },
     "aria-hidden": "true"
-  }, s.map(l => /*#__PURE__*/React.createElement("div", {
+  }, SCORE_SCALE.map(l => /*#__PURE__*/React.createElement("div", {
     key: l.value,
     style: {
       height: 8,
@@ -731,7 +697,7 @@ function AttributeSegmentBar({
     }
   }, ordered.map(a => {
     const value = player.scores[a.id] ? player.scores[a.id].value : 0;
-    const lvl = levelFor(value, scaleForCategory(a.category));
+    const lvl = levelFor(value);
     return /*#__PURE__*/React.createElement("div", {
       key: a.id,
       title: `${a.name}: ${lvl.label}`,
@@ -1427,7 +1393,6 @@ function PlayerDetail({
       gap: 20
     }
   }, grouped.map(g => {
-    const scale = scaleForCategory(g.category);
     return /*#__PURE__*/React.createElement("div", {
       key: g.category
     }, /*#__PURE__*/React.createElement("p", {
@@ -1450,7 +1415,7 @@ function PlayerDetail({
         value: 0,
         history: []
       };
-      const lvl = levelFor(rec.value, scale);
+      const lvl = levelFor(rec.value);
       const isEditing = editingSkill === skill.id;
       return /*#__PURE__*/React.createElement("div", {
         key: skill.id,
@@ -1488,8 +1453,7 @@ function PlayerDetail({
           marginTop: 8
         }
       }, /*#__PURE__*/React.createElement(SegmentBar, {
-        value: rec.value,
-        scale: scale
+        value: rec.value
       }))), /*#__PURE__*/React.createElement("span", {
         style: {
           fontSize: 12,
@@ -1516,10 +1480,10 @@ function PlayerDetail({
       }, "Set new score"), /*#__PURE__*/React.createElement("div", {
         style: {
           display: "grid",
-          gridTemplateColumns: `repeat(${scale.length}, 1fr)`,
+          gridTemplateColumns: `repeat(${SCORE_SCALE.length}, 1fr)`,
           gap: 6
         }
-      }, scale.map(l => /*#__PURE__*/React.createElement("button", {
+      }, SCORE_SCALE.map(l => /*#__PURE__*/React.createElement("button", {
         key: l.value,
         disabled: saving,
         onClick: () => {
@@ -1568,7 +1532,7 @@ function PlayerDetail({
         }
       }, /*#__PURE__*/React.createElement(Clock, {
         size: 11
-      }), /*#__PURE__*/React.createElement("span", null, fmtDate(h.date), " — scored ", levelFor(h.value, scale).label))))));
+      }), /*#__PURE__*/React.createElement("span", null, fmtDate(h.date), " — scored ", levelFor(h.value).label))))));
     })));
   }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
     style: {
@@ -1824,30 +1788,6 @@ const PREVIEW_ATTRIBUTES = [{
   name: "Sweep",
   category: "technical",
   sort_order: 36
-}, {
-  id: "pa19",
-  squad_id: "preview-squad",
-  name: "Deflection on target",
-  category: "outcomes",
-  sort_order: 41
-}, {
-  id: "pa20",
-  squad_id: "preview-squad",
-  name: "Interception",
-  category: "outcomes",
-  sort_order: 42
-}, {
-  id: "pa21",
-  squad_id: "preview-squad",
-  name: "Top D strike",
-  category: "outcomes",
-  sort_order: 43
-}, {
-  id: "pa22",
-  squad_id: "preview-squad",
-  name: "Wide distribution",
-  category: "outcomes",
-  sort_order: 44
 }];
 function makePreviewPlayers() {
   return [{
@@ -1879,14 +1819,6 @@ function makePreviewPlayers() {
       },
       pa14: {
         value: 2,
-        history: []
-      },
-      pa19: {
-        value: 3,
-        history: []
-      },
-      pa20: {
-        value: 1,
         history: []
       }
     },
