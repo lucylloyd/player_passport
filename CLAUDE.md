@@ -1,0 +1,124 @@
+# Player Passport (Progress Squad)
+
+A web app that grassroots sports coaches use to score youth players against benchmarked attributes and leave feedback. Coaches sign in and only see the squads they've been allocated to.
+
+The owner (Lucy) is learning as she goes. Read **Working rules** before making any change.
+
+## Working rules
+
+1. **Always work on a new git branch, never directly on `main`.** Create the branch from the latest `origin/main` before editing anything. `main` is what GitHub Pages serves, so anything merged there goes live.
+2. **Explain changes in plain language.** Say what changed, why, and what Lucy will see differently. Avoid jargon, or explain it when it can't be avoided.
+3. **Database changes go in a SQL file in `/migrations`, for Lucy to review and run herself** in the Supabase SQL Editor. Never run database changes directly.
+   - Name files `migrations/YYYY-MM-DD-short-description.sql`.
+   - Every file **starts with a backup of each table it affects** (see the template below).
+   - Add comments in the file explaining each step in plain language, plus a check query at the end so Lucy can confirm it worked.
+   - Wrap the changes in `begin; … commit;` so a failure changes nothing.
+4. **Every new table must have RLS enabled**, with policies that follow the existing pattern: coaches only reach squads they're allocated to through `coach_squads`, and admins (`is_admin()`) reach everything. See the template below.
+5. **Never put the `service_role` key in the frontend**, or anywhere in this repo. It bypasses all RLS. Only the publishable (anon) key belongs in `index.html`.
+6. **Test changes with `?preview=1` and fake data before Lucy deploys.** Preview mode needs no sign-in and never touches Supabase. If a change adds new data or fields, update the preview mock data too so it can be tested.
+
+## Architecture
+
+- **The whole app is one HTML file: `index.html`.** There is no build step and no `package.json`.
+  - React, ReactDOM and supabase-js are pasted into the file as minified `<script>` blocks. They are at the top, before about line 363. Don't edit them.
+  - The app code is in the last `<script>` block. It's already compiled from JSX, so it's written as `React.createElement(...)` calls, not JSX tags. Edit it in that same style.
+- **Supabase** provides the database (Postgres), sign-in and row-level security (RLS).
+  - The project URL and the publishable key are set near the top of the app script (`SUPABASE_URL`, `SUPABASE_ANON_KEY`). It's safe for the publishable key to be public, because RLS controls what it can reach.
+  - Coaches sign in with an emailed magic link or a 6-digit code (`signInWithOtp` with `shouldCreateUser: false`, then `verifyOtp`). Nobody can sign up themselves: an admin invites each coach in Supabase, under Authentication → Users.
+  - Emails are sent through custom SMTP set up in Supabase.
+- **Hosting**: GitHub Pages serves the `main` branch at **app.progresssquad.co.uk**, set by the `CNAME` file.
+- **Preview mode**: `?preview=1` (`isPreviewMode`) skips sign-in and loads a built-in demo squad, `PREVIEW_SQUAD`, `PREVIEW_ATTRIBUTES` and `makePreviewPlayers()`. Edits in preview mode are only kept in memory.
+- **Other files**
+  - `privacy/index.html` and `privacyPP.md`: the public privacy page.
+  - `docs/schema.md`: a dump of the database columns and RLS policies. Update it after any migration.
+  - `PPwithattributedescription.html` and `player-passport(3).html`: older copies of the app. They aren't served as the app, so don't edit them.
+
+## How the app reads and writes data
+
+- On load, the app selects **all** `players` (with `squads(id, name)`), and then the `attributes` for those squads. After that it loads `scores` and `feedback` for those players. It doesn't filter by coach: **RLS does the filtering**, so a coach only gets back the players in their squads.
+- Each time a coach saves a score, the app **inserts a new row**. It never updates the old one. The latest row per player and attribute is the current score, and earlier rows are the history.
+- Feedback is linked to a **player**, not to an attribute.
+
+## Database tables
+
+All tables are in the `public` schema, and all IDs are `uuid`.
+
+| Table | Columns | Notes |
+|---|---|---|
+| `squads` | `id`, `name` | |
+| `attributes` | `id`, `squad_id`, `name`, `category`, `sort_order`, `description`, `sport` | Each squad has its own copy of each attribute, so the same name in two squads means two different rows. `sort_order` sets the display order. `description` is the scoring criteria coaches see when they tap an attribute. |
+| `players` | `id`, `name`, `age`, `squad_id`, `position`, `role` | `position` and `role` are free text, shown as tags on the player tile. |
+| `scores` | `id`, `player_id`, `attribute_id`, `value` (int), `scored_by` (coach uuid), `scored_at` | Only new rows are added; old scores aren't changed. |
+| `feedback` | `id`, `player_id`, `note`, `coach_id`, `created_at` | |
+| `coach_squads` | `coach_id`, `squad_id` | Links coaches (`auth.users.id`) to squads. **This table controls who sees what.** |
+| `profiles` | `id`, `email`, `role` | One row per user. `is_admin()` is assumed to read `role` here: check the function definition before relying on it. |
+
+## RLS policies
+
+The pattern used throughout: **`is_admin()` OR the row belongs to a squad listed in `coach_squads` for `auth.uid()`**.
+
+| Table | Command | Who |
+|---|---|---|
+| `squads` | SELECT | Any signed-in user. |
+| `attributes` | SELECT | Any signed-in user. |
+| `players` | SELECT | Admin, or a coach of the player's squad. |
+| `players` | INSERT / UPDATE / DELETE | Admin only. |
+| `scores` | SELECT, INSERT | Admin, or a coach of the player's squad. |
+| `feedback` | SELECT, INSERT | Admin, or a coach of the player's squad. |
+| `coach_squads` | SELECT | The coach themselves, or an admin. |
+| `coach_squads` | ALL | Admin only. |
+| `profiles` | SELECT | The user themselves, or an admin. |
+
+Gaps to be aware of:
+- Nobody, including admins, can update or delete `scores` or `feedback` from the app. Changes to these tables are made in the SQL Editor.
+- `squads` and `attributes` have no write policies, so they're managed in the SQL Editor.
+- Any signed-in coach can read every squad name and attribute, but no player data outside their own squads.
+
+The SQL Editor runs with full rights and ignores RLS. It's where admin changes such as adding squads, players and coach links are made.
+
+## Templates
+
+### Backup at the start of a migration
+
+Backups go in a separate `backups` schema, not `public`. That way they aren't reachable through the app's API, which only exposes `public`.
+
+```sql
+create schema if not exists backups;
+create table backups.scores_2026_11_12 as table public.scores;
+-- repeat for each table this migration changes
+```
+
+To restore a table from a backup:
+
+```sql
+truncate public.scores;
+insert into public.scores select * from backups.scores_2026_11_12;
+```
+
+### RLS for a new table linked to a player
+
+```sql
+alter table public.new_table enable row level security;
+
+create policy "new_table: coach sees own squads" on public.new_table
+  for select using (
+    is_admin() or player_id in (
+      select p.id from players p
+      where p.squad_id in (
+        select squad_id from coach_squads where coach_id = auth.uid()
+      )
+    )
+  );
+
+create policy "new_table: coach can insert for own squads" on public.new_table
+  for insert with check ( /* same condition as above */ );
+```
+
+If the table is linked to a squad instead of a player, use `squad_id in (select squad_id from coach_squads where coach_id = auth.uid())`.
+
+## Deploying
+
+1. Make changes on a branch.
+2. Test with fake data by opening `index.html` locally with `?preview=1`. A real sign-in link won't redirect back to a local file, so test sign-in on the live site after merging.
+3. Lucy runs any migration in the Supabase SQL Editor.
+4. Open a pull request into `main` and merge it. GitHub Pages then publishes the update within a few minutes.
