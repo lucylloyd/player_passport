@@ -52,6 +52,8 @@ The owner (Lucy) is learning as she goes. Read **Working rules** before making a
 - `drills.config` (jsonb) holds `attempts`, `results` (`[{label, points}]`), `retake_enabled`, `retake_label`, `tags` and `cutoffs`. `cutoffs` holds 4 whole percentages of the maximum total, the minimum for levels 2–5; the default is `[40, 60, 75, 90]`. The database checks this shape with `drill_config_is_valid()`, and the app mirrors it in `drillProblems()`.
 - Level = 1 + the number of cut-offs where `total × 100 ≥ cutoff × max`. This whole-number rule is in both `drill_level()` (SQL) and `drillLevel()` (app). Keep them the same.
 - When a `drill_entries` row is inserted, triggers check it, **recalculate `total` and `level`** (ignoring what the app sent), and insert the matching `scores` row. The app only inserts `drill_id`, `player_id`, `attempts`, `retakes`, `tags` and `note`.
+- **Session date:** the runner has a date field that defaults to today and can't be in the future. For an earlier date, the app sends `recorded_at` as midday on that date. The database rejects future dates, and the score's `scored_at` gets the same value, so backdated sessions slot into the history in date order. A backdated result older than the latest score won't change the current score.
+- Drills can't be run on an archived attribute. The database refuses, and the app hides those drills.
 - Once a drill has entries, its attribute can't be changed, and it can't be deleted (`on delete restrict`). Deleting an attribute that has drill entries is therefore blocked too.
 - Screens: "Drill setup" (`DrillSetup` and `DrillEditor`), shown to admins and squad leads, and "Run drill" on a player's page (`DrillRunner`).
 - Not built yet: attempt groups and timed drills.
@@ -64,9 +66,9 @@ All tables are in the `public` schema, and all IDs are `uuid`.
 | Table | Columns | Notes |
 |---|---|---|
 | `squads` | `id`, `name` | |
-| `attributes` | `id`, `squad_id`, `name`, `category`, `sort_order`, `description`, `sport` | Each squad has its own copy of each attribute, so the same name in two squads means two different rows. `sort_order` sets the display order. `description` is the scoring criteria coaches see when they tap an attribute. |
+| `attributes` | `id`, `squad_id`, `name`, `category`, `sort_order`, `description`, `sport`, `archived_at` | Each squad has its own copy of each attribute, so the same name in two squads means two different rows. `sort_order` sets the display order. `description` is the scoring criteria coaches see when they tap an attribute. `archived_at` set means the attribute is archived: it's hidden from scoring screens, the squad overview and drills, but its scores are kept. Admins archive and restore attributes on the Attributes screen. **Archive rather than delete.** |
 | `players` | `id`, `name`, `age`, `squad_id`, `position`, `role` | `position` and `role` are free text, shown as tags on the player tile. |
-| `scores` | `id`, `player_id`, `attribute_id`, `value` (int), `scored_by` (coach uuid), `scored_at` | Only new rows are added; old scores aren't changed. `value` must be 1–5, enforced by the check constraint `scores_value_1_to_5`. |
+| `scores` | `id`, `player_id`, `attribute_id`, `value` (int), `scored_by` (coach uuid), `scored_at` | Only new rows are added; old scores aren't changed. `value` must be 1–5, enforced by the check constraint `scores_value_1_to_5`. `attribute_id` has `ON DELETE RESTRICT` (constraint `scores_skill_id_fkey`), so deleting an attribute that has scores is refused. |
 | `feedback` | `id`, `player_id`, `note`, `coach_id`, `created_at` | |
 | `coach_squads` | `coach_id`, `squad_id`, `is_lead` | Links coaches (`auth.users.id`) to squads. **This table controls who sees what.** `is_lead` lets that coach set up drills for that squad. |
 | `drills` | `id`, `squad_id`, `name`, `attribute_id`, `config` (jsonb), `created_by`, `created_at` | See **Drills** above. |
@@ -83,6 +85,7 @@ The pattern used throughout: **`is_admin()` OR the row belongs to a squad listed
 |---|---|---|
 | `squads` | SELECT | Any signed-in user. |
 | `attributes` | SELECT | Any signed-in user. |
+| `attributes` | UPDATE | Admin only (used for archiving). |
 | `players` | SELECT | Admin, or a coach of the player's squad. |
 | `players` | INSERT / UPDATE / DELETE | Admin only. |
 | `scores` | SELECT, INSERT | Admin, or a coach of the player's squad. |
@@ -99,7 +102,7 @@ RLS tests for drills are in `migrations/2026-11-12-drills-tests.sql`. They act a
 
 Gaps to be aware of:
 - Nobody, including admins, can update or delete `scores` or `feedback` from the app. Changes to these tables are made in the SQL Editor.
-- `squads` and `attributes` have no write policies, so they're managed in the SQL Editor.
+- `squads` have no write policies, so they're managed in the SQL Editor. `attributes` can only be updated by admins (for archiving), and new ones are added in the SQL Editor.
 - Any signed-in coach can read every squad name and attribute, but no player data outside their own squads.
 
 The SQL Editor runs with full rights and ignores RLS. It's where admin changes such as adding squads, players and coach links are made.
