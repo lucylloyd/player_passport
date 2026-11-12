@@ -39,6 +39,13 @@ The owner (Lucy) is learning as she goes. Read **Working rules** before making a
 - Each time a coach saves a score, the app **inserts a new row**. It never updates the old one. The latest row per player and attribute is the current score, and earlier rows are the history.
 - Feedback is linked to a **player**, not to an attribute.
 
+## Scoring scale and categories
+
+- Every attribute is scored on one 5-level scale: 1 Not yet, 2 Developing, 3 Secure, 4 Strong, 5 Excellent. The database rejects any other value (see `scores` below).
+- The level names are set in one place, `SCORE_LEVEL_LABELS`. Colours are in `SCORE_SCALE`. Each level has a `color` (badge and bar) and a `text` colour chosen for at least 4.5:1 contrast, so check contrast if you change a colour.
+- An older 3-level "outcomes" scale and an "Outcomes" category were removed on 2026-11-12. They were only ever used in the demo data.
+- Attribute categories must be one of `attitude`, `tactical`, `technical` or `physical`, in lowercase (`CATEGORY_ORDER`). **An attribute with any other category won't appear in the app.** If it has no category, it shows under Attitude.
+
 ## Database tables
 
 All tables are in the `public` schema, and all IDs are `uuid`.
@@ -48,7 +55,7 @@ All tables are in the `public` schema, and all IDs are `uuid`.
 | `squads` | `id`, `name` | |
 | `attributes` | `id`, `squad_id`, `name`, `category`, `sort_order`, `description`, `sport` | Each squad has its own copy of each attribute, so the same name in two squads means two different rows. `sort_order` sets the display order. `description` is the scoring criteria coaches see when they tap an attribute. |
 | `players` | `id`, `name`, `age`, `squad_id`, `position`, `role` | `position` and `role` are free text, shown as tags on the player tile. |
-| `scores` | `id`, `player_id`, `attribute_id`, `value` (int), `scored_by` (coach uuid), `scored_at` | Only new rows are added; old scores aren't changed. |
+| `scores` | `id`, `player_id`, `attribute_id`, `value` (int), `scored_by` (coach uuid), `scored_at` | Only new rows are added; old scores aren't changed. `value` must be 1–5, enforced by the check constraint `scores_value_1_to_5`. |
 | `feedback` | `id`, `player_id`, `note`, `coach_id`, `created_at` | |
 | `coach_squads` | `coach_id`, `squad_id` | Links coaches (`auth.users.id`) to squads. **This table controls who sees what.** |
 | `profiles` | `id`, `email`, `role` | One row per user. A user is an admin when `role = 'admin'`. |
@@ -82,19 +89,22 @@ The SQL Editor runs with full rights and ignores RLS. It's where admin changes s
 
 ### Backup at the start of a migration
 
-Backups go in a separate `backups` schema, not `public`. That way they aren't reachable through the app's API, which only exposes `public`.
+Backups go in a separate `backups` schema, not `public`. That way they aren't reachable through the app's API, which only exposes `public`. RLS is also enabled on each backup, with no policies. This means nobody can read it through the API even if the schema is exposed by mistake. It also stops the Supabase SQL Editor from warning about a table without RLS. The SQL Editor still reads backups normally, because it runs as the table owner.
+
+Name each backup `<table>_<YYYY_MM_DD>` after the migration date.
 
 ```sql
 create schema if not exists backups;
-create table backups.scores_2026_11_12 as table public.scores;
--- repeat for each table this migration changes
+create table backups.scores_YYYY_MM_DD as table public.scores;
+alter table backups.scores_YYYY_MM_DD enable row level security;
+-- repeat both lines for each table this migration changes
 ```
 
 To restore a table from a backup:
 
 ```sql
 truncate public.scores;
-insert into public.scores select * from backups.scores_2026_11_12;
+insert into public.scores select * from backups.scores_YYYY_MM_DD;
 ```
 
 ### RLS for a new table linked to a player
@@ -124,3 +134,7 @@ If the table is linked to a squad instead of a player, use `squad_id in (select 
 2. Test with fake data by opening `index.html` locally with `?preview=1`. A real sign-in link won't redirect back to a local file, so test sign-in on the live site after merging.
 3. Lucy runs any migration in the Supabase SQL Editor.
 4. Open a pull request into `main` and merge it. GitHub Pages then publishes the update within a few minutes.
+
+If a migration changes what existing data means, as the 1–4 to 1–5 scale change did, the old app and the new data don't match. So run the migration when no coach is using the app, then merge **straight away**. Say this clearly in the instructions to Lucy.
+
+After an update, browsers can keep showing a saved copy of the old app. Sometimes that causes errors such as "Couldn't load data: NetworkError". The fix is a hard refresh (**Ctrl + Shift + R**, or **Cmd + Shift + R** on a Mac), or on a phone, closing the tab and reopening the app.
