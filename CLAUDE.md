@@ -46,6 +46,17 @@ The owner (Lucy) is learning as she goes. Read **Working rules** before making a
 - An older 3-level "outcomes" scale and an "Outcomes" category were removed on 2026-11-12. They were only ever used in the demo data.
 - Attribute categories must be one of `attitude`, `tactical`, `technical` or `physical`, in lowercase (`CATEGORY_ORDER`). **An attribute with any other category won't appear in the app.** If it has no category, it shows under Attitude.
 
+## Drills
+
+- A drill is a structured test that produces a 1–5 score for **one attribute**. Because attributes belong to one squad, so does each drill: `drills.squad_id` is filled in by the database from the attribute.
+- `drills.config` (jsonb) holds `attempts`, `results` (`[{label, points}]`), `retake_enabled`, `retake_label`, `tags` and `cutoffs`. `cutoffs` holds 4 whole percentages of the maximum total, the minimum for levels 2–5; the default is `[40, 60, 75, 90]`. The database checks this shape with `drill_config_is_valid()`, and the app mirrors it in `drillProblems()`.
+- Level = 1 + the number of cut-offs where `total × 100 ≥ cutoff × max`. This whole-number rule is in both `drill_level()` (SQL) and `drillLevel()` (app). Keep them the same.
+- When a `drill_entries` row is inserted, triggers check it, **recalculate `total` and `level`** (ignoring what the app sent), and insert the matching `scores` row. The app only inserts `drill_id`, `player_id`, `attempts`, `retakes`, `tags` and `note`.
+- Once a drill has entries, its attribute can't be changed, and it can't be deleted (`on delete restrict`). Deleting an attribute that has drill entries is therefore blocked too.
+- Screens: "Drill setup" (`DrillSetup` and `DrillEditor`), shown to admins and squad leads, and "Run drill" on a player's page (`DrillRunner`).
+- Not built yet: attempt groups and timed drills.
+- To make a coach a squad lead, set `coach_squads.is_lead = true` for that coach and squad in the SQL Editor. Only admins can change it.
+
 ## Database tables
 
 All tables are in the `public` schema, and all IDs are `uuid`.
@@ -57,7 +68,9 @@ All tables are in the `public` schema, and all IDs are `uuid`.
 | `players` | `id`, `name`, `age`, `squad_id`, `position`, `role` | `position` and `role` are free text, shown as tags on the player tile. |
 | `scores` | `id`, `player_id`, `attribute_id`, `value` (int), `scored_by` (coach uuid), `scored_at` | Only new rows are added; old scores aren't changed. `value` must be 1–5, enforced by the check constraint `scores_value_1_to_5`. |
 | `feedback` | `id`, `player_id`, `note`, `coach_id`, `created_at` | |
-| `coach_squads` | `coach_id`, `squad_id` | Links coaches (`auth.users.id`) to squads. **This table controls who sees what.** |
+| `coach_squads` | `coach_id`, `squad_id`, `is_lead` | Links coaches (`auth.users.id`) to squads. **This table controls who sees what.** `is_lead` lets that coach set up drills for that squad. |
+| `drills` | `id`, `squad_id`, `name`, `attribute_id`, `config` (jsonb), `created_by`, `created_at` | See **Drills** above. |
+| `drill_entries` | `id`, `drill_id`, `player_id`, `attempts` (jsonb list of points), `retakes`, `tags` (text[]), `note`, `total`, `level`, `recorded_by`, `recorded_at` | Like `scores`, only new rows are added. Each one also adds a `scores` row. |
 | `profiles` | `id`, `email`, `role` | One row per user. A user is an admin when `role = 'admin'`. |
 
 ## RLS policies
@@ -77,6 +90,12 @@ The pattern used throughout: **`is_admin()` OR the row belongs to a squad listed
 | `coach_squads` | SELECT | The coach themselves, or an admin. |
 | `coach_squads` | ALL | Admin only. |
 | `profiles` | SELECT | The user themselves, or an admin. |
+| `drills` | SELECT | Admin, or a coach of the drill's squad. |
+| `drills` | INSERT / UPDATE | Admin, or a lead (`is_lead`) of the drill's squad. |
+| `drills` | DELETE | Admin only. |
+| `drill_entries` | SELECT, INSERT | Admin, or a coach of the player's squad. |
+
+RLS tests for drills are in `migrations/2026-11-12-drills-tests.sql`. They act as pretend coaches by running `set local role authenticated` and setting `request.jwt.claims`, then stop on purpose so nothing is kept. Follow the same pattern for future security tests.
 
 Gaps to be aware of:
 - Nobody, including admins, can update or delete `scores` or `feedback` from the app. Changes to these tables are made in the SQL Editor.

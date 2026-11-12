@@ -466,6 +466,19 @@ const X = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.crea
 }), /*#__PURE__*/React.createElement("path", {
   d: "M6 6l12 12"
 }));
+const Plus = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.createElement("path", {
+  d: "M12 5v14"
+}), /*#__PURE__*/React.createElement("path", {
+  d: "M5 12h14"
+}));
+const Undo = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.createElement("path", {
+  d: "M9 14L4 9l5-5"
+}), /*#__PURE__*/React.createElement("path", {
+  d: "M4 9h10.5a5.5 5.5 0 0 1 0 11H11"
+}));
+const Play = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.createElement("path", {
+  d: "M7 4l13 8-13 8z"
+}));
 const TOKENS = {
   turf: "#0B3D62",
   chalk: "#F4F7FA",
@@ -547,6 +560,122 @@ function groupByCategory(attrs) {
   }));
 }
 
+/* =========================================================
+   DRILLS
+   A drill is a structured test that produces a score (1–5)
+   for one attribute. When an entry is saved, the database
+   recalculates the total and level itself (see
+   migrations/2026-11-12-drills.sql); drillLevel below uses
+   the same rule so the result screen can show it straight away.
+========================================================= */
+const DEFAULT_DRILL_CONFIG = {
+  attempts: 5,
+  results: [{
+    label: "Hit",
+    points: 2
+  }, {
+    label: "Partial",
+    points: 1
+  }, {
+    label: "Miss",
+    points: 0
+  }],
+  retake_enabled: true,
+  retake_label: "Retake",
+  tags: [],
+  cutoffs: [40, 60, 75, 90]
+};
+const DRILL_LIMITS = {
+  maxAttempts: 50,
+  maxResults: 8,
+  maxPoints: 100
+};
+function drillMaxTotal(config) {
+  const top = Math.max(0, ...config.results.map(r => r.points));
+  return top * config.attempts;
+}
+
+// cutoffs[i] is the minimum % of the maximum total for level i + 2.
+// Whole-number maths (total × 100 ≥ cut-off × max) so 40% is exactly 40%.
+function drillLevel(total, maxTotal, cutoffs) {
+  if (maxTotal <= 0) return 1;
+  return 1 + cutoffs.filter(c => total * 100 >= c * maxTotal).length;
+}
+
+// The percentage and points range that lands on each level, for the
+// cut-off preview on the Drill setup screen.
+function drillLevelRanges(config) {
+  const max = drillMaxTotal(config);
+  const c = config.cutoffs;
+  const minPoints = level => level === 1 ? 0 : Math.ceil(c[level - 2] * max / 100);
+  return SCORE_SCALE.map(l => {
+    const level = l.value;
+    const fromPts = minPoints(level);
+    const toPts = level === 5 ? max : minPoints(level + 1) - 1;
+    return {
+      level,
+      fromPct: level === 1 ? 0 : c[level - 2],
+      toPct: level === 5 ? 100 : c[level - 1],
+      fromPts,
+      toPts,
+      empty: toPts < fromPts
+    };
+  });
+}
+
+// Mirrors the database's drill_config_is_valid check, as plain-English
+// messages for the setup screen. An empty list means the drill can be saved.
+function drillProblems(name, attributeId, config) {
+  const problems = [];
+  const isWhole = n => Number.isInteger(n);
+  if (!name.trim()) problems.push("Give the drill a name.");
+  if (!attributeId) problems.push("Choose the attribute this drill scores.");
+  if (!isWhole(config.attempts) || config.attempts < 1 || config.attempts > DRILL_LIMITS.maxAttempts) problems.push(`Number of attempts must be a whole number from 1 to ${DRILL_LIMITS.maxAttempts}.`);
+  if (config.results.length < 1) problems.push("Add at least one result button.");
+  if (config.results.some(r => !r.label.trim())) problems.push("Every result button needs a label.");
+  if (config.results.some(r => !isWhole(r.points) || r.points < 0 || r.points > DRILL_LIMITS.maxPoints)) problems.push(`Points must be whole numbers from 0 to ${DRILL_LIMITS.maxPoints}.`);else if (config.results.length && Math.max(...config.results.map(r => r.points)) <= 0) problems.push("At least one result must be worth more than 0 points.");
+  if (config.retake_enabled && !config.retake_label.trim()) problems.push("Give the retake button a label.");
+  const c = config.cutoffs;
+  if (c.some(v => !isWhole(v) || v < 1 || v > 100) || c.some((v, i) => i > 0 && v <= c[i - 1])) problems.push("Cut-offs must be whole percentages from 1 to 100, each higher than the one before.");
+  return problems;
+}
+const fieldLabelStyle = {
+  display: "block",
+  fontSize: 12,
+  fontWeight: 600,
+  color: TOKENS.turf,
+  margin: "0 0 6px"
+};
+const inputStyle = {
+  width: "100%",
+  minHeight: 44,
+  fontSize: 15,
+  borderRadius: 8,
+  border: "1px solid rgba(11,61,98,0.15)",
+  padding: "8px 12px",
+  color: TOKENS.turf,
+  background: "#fff"
+};
+const primaryButtonStyle = {
+  width: "100%",
+  minHeight: 48,
+  borderRadius: 10,
+  border: "none",
+  background: TOKENS.turf,
+  color: TOKENS.chalk,
+  fontSize: 15,
+  fontWeight: 700
+};
+const secondaryButtonStyle = {
+  minHeight: 44,
+  padding: "0 14px",
+  borderRadius: 10,
+  border: "1px solid rgba(11,61,98,0.2)",
+  background: "#fff",
+  color: TOKENS.turf,
+  fontSize: 14,
+  fontWeight: 600
+};
 function fmtDate(iso) {
   return new Date(iso).toLocaleDateString("en-GB", {
     day: "2-digit",
@@ -1102,7 +1231,9 @@ function Landing({
   players,
   onOpenSquad,
   onOpenPlayer,
-  onSignOut
+  onSignOut,
+  canSetupDrills,
+  onOpenDrillSetup
 }) {
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
     title: "PLAYER PASSPORT",
@@ -1140,7 +1271,41 @@ function Landing({
     size: 16
   }) : /*#__PURE__*/React.createElement(UserRound, {
     size: 16
-  }), t === "squad" ? "By squad" : "By player"))), squads.length === 0 && /*#__PURE__*/React.createElement("p", {
+  }), t === "squad" ? "By squad" : "By player"))), canSetupDrills && /*#__PURE__*/React.createElement("button", {
+    onClick: onOpenDrillSetup,
+    className: "press",
+    style: {
+      ...cardBase,
+      width: "100%",
+      minHeight: 48,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      padding: "12px 16px",
+      marginBottom: 20
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: "left"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 14,
+      color: TOKENS.turf
+    }
+  }, "Drill setup"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      marginTop: 2,
+      color: "#6B7C8C"
+    }
+  }, "Create and edit drills for your squads")), /*#__PURE__*/React.createElement(ChevronRight, {
+    size: 18,
+    style: {
+      color: TOKENS.amber
+    }
+  })), squads.length === 0 && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 13,
       color: "#6B7C8C"
@@ -1364,11 +1529,14 @@ function PlayerDetail({
   onScoreChange,
   onAddFeedback,
   onSignOut,
-  saving
+  saving,
+  drills,
+  onRunDrill
 }) {
   const [editingSkill, setEditingSkill] = useState(null);
   const [note, setNote] = useState("");
   const grouped = groupByCategory(attributes);
+  const attributeName = id => (attributes.find(a => a.id === id) || {}).name || "";
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
     title: player.name,
     subtitle: `${player.squadName} · age ${player.age}`,
@@ -1381,7 +1549,61 @@ function PlayerDetail({
       flexDirection: "column",
       gap: 24
     }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+  }, drills.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      ...sectionLabelStyle,
+      marginBottom: 8
+    }
+  }, "Drills"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 8
+    }
+  }, drills.map(d => /*#__PURE__*/React.createElement("div", {
+    key: d.id,
+    style: {
+      ...cardBase,
+      display: "flex",
+      alignItems: "center",
+      gap: 12,
+      padding: "10px 12px 10px 16px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "truncate",
+    style: {
+      fontWeight: 600,
+      fontSize: 14,
+      color: TOKENS.turf
+    }
+  }, d.name), /*#__PURE__*/React.createElement("div", {
+    className: "truncate",
+    style: {
+      fontSize: 12,
+      marginTop: 2,
+      color: "#6B7C8C"
+    }
+  }, attributeName(d.attribute_id), " · ", d.config.attempts, " attempts")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => onRunDrill(d.id),
+    className: "press",
+    style: {
+      ...secondaryButtonStyle,
+      flexShrink: 0,
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      background: TOKENS.turf,
+      borderColor: TOKENS.turf,
+      color: TOKENS.chalk
+    }
+  }, /*#__PURE__*/React.createElement(Play, {
+    size: 14
+  }), " Run drill"))))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
     style: {
       ...sectionLabelStyle,
       marginBottom: 8
@@ -1632,6 +1854,875 @@ function PlayerDetail({
   }, "Focus next: attributes still sitting at the lower end of their scale are the priority for next session. Every score you set here is saved straight to your Supabase database, scoped to what your coach account can see."))));
 }
 
+/* ---------------- Drill setup list (admins and squad leads) ---------------- */
+
+function DrillSetup({
+  squads,
+  attributesBySquad,
+  drills,
+  onBack,
+  onSignOut,
+  onNew,
+  onEdit
+}) {
+  const attributeName = (squadId, id) => ((attributesBySquad[squadId] || []).find(a => a.id === id) || {}).name || "";
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
+    title: "DRILL SETUP",
+    subtitle: "Create and edit drills for your squads",
+    onBack: onBack,
+    onSignOut: onSignOut
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 16,
+      display: "flex",
+      flexDirection: "column",
+      gap: 24
+    }
+  }, squads.length === 0 && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: "#6B7C8C"
+    }
+  }, "You're not a lead for any squad yet."), squads.map(sq => {
+    const squadDrills = drills.filter(d => d.squad_id === sq.id);
+    return /*#__PURE__*/React.createElement("div", {
+      key: sq.id
+    }, /*#__PURE__*/React.createElement("p", {
+      style: {
+        ...sectionLabelStyle,
+        marginBottom: 8
+      }
+    }, sq.name), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        gap: 8
+      }
+    }, squadDrills.length === 0 && /*#__PURE__*/React.createElement("p", {
+      style: {
+        fontSize: 13,
+        color: "#6B7C8C",
+        margin: "0 0 4px"
+      }
+    }, "No drills yet."), squadDrills.map(d => /*#__PURE__*/React.createElement("button", {
+      key: d.id,
+      onClick: () => onEdit(d),
+      className: "press",
+      style: {
+        ...cardBase,
+        width: "100%",
+        minHeight: 48,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "12px 16px"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        textAlign: "left",
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "truncate",
+      style: {
+        fontWeight: 600,
+        fontSize: 14,
+        color: TOKENS.turf
+      }
+    }, d.name), /*#__PURE__*/React.createElement("div", {
+      className: "truncate",
+      style: {
+        fontSize: 12,
+        marginTop: 2,
+        color: "#6B7C8C"
+      }
+    }, attributeName(sq.id, d.attribute_id), " · ", d.config.attempts, " attempts")), /*#__PURE__*/React.createElement(ChevronRight, {
+      size: 18,
+      style: {
+        color: "#B9C6D1",
+        flexShrink: 0
+      }
+    }))), /*#__PURE__*/React.createElement("button", {
+      onClick: () => onNew(sq.id),
+      className: "press",
+      style: {
+        ...secondaryButtonStyle,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 6,
+        borderStyle: "dashed"
+      }
+    }, /*#__PURE__*/React.createElement(Plus, {
+      size: 16
+    }), " New drill")));
+  })));
+}
+
+/* ---------------- Drill editor ---------------- */
+
+function DrillEditor({
+  squads,
+  attributesBySquad,
+  drill,
+  initialSquadId,
+  onCancel,
+  onSave,
+  onSignOut,
+  saving
+}) {
+  const start = drill ? drill.config : DEFAULT_DRILL_CONFIG;
+  const [squadId, setSquadId] = useState(drill ? drill.squad_id : initialSquadId);
+  const [name, setName] = useState(drill ? drill.name : "");
+  const [attributeId, setAttributeId] = useState(drill ? drill.attribute_id : "");
+  const [attempts, setAttempts] = useState(String(start.attempts));
+  const [results, setResults] = useState(start.results.map(r => ({
+    label: r.label,
+    points: String(r.points)
+  })));
+  const [retakeEnabled, setRetakeEnabled] = useState(start.retake_enabled);
+  const [retakeLabel, setRetakeLabel] = useState(start.retake_label);
+  const [tags, setTags] = useState(start.tags);
+  const [tagDraft, setTagDraft] = useState("");
+  const [cutoffs, setCutoffs] = useState(start.cutoffs.map(String));
+  const toNumber = s => s.trim() === "" ? NaN : Number(s);
+  const config = {
+    attempts: toNumber(attempts),
+    results: results.map(r => ({
+      label: r.label.trim(),
+      points: toNumber(r.points)
+    })),
+    retake_enabled: retakeEnabled,
+    retake_label: retakeLabel.trim() || "Retake",
+    tags,
+    cutoffs: cutoffs.map(toNumber)
+  };
+  if (retakeEnabled) config.retake_label = retakeLabel.trim();
+  const problems = drillProblems(name, attributeId, config);
+  const configOk = drillProblems("ok", "ok", config).length === 0;
+  const ranges = configOk ? drillLevelRanges(config) : null;
+  const squadAttributes = groupByCategory(attributesBySquad[squadId] || []).flatMap(g => g.items);
+  const addTag = () => {
+    const t = tagDraft.trim();
+    if (t && !tags.includes(t)) setTags([...tags, t]);
+    setTagDraft("");
+  };
+  const updateResult = (i, field, value) => setResults(results.map((r, j) => j === i ? {
+    ...r,
+    [field]: value
+  } : r));
+  const stepAttempts = delta => {
+    const n = Number.isInteger(config.attempts) ? config.attempts : DEFAULT_DRILL_CONFIG.attempts;
+    setAttempts(String(Math.min(DRILL_LIMITS.maxAttempts, Math.max(1, n + delta))));
+  };
+  const section = (label, ...children) => /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...cardBase,
+      padding: 16
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      ...sectionLabelStyle,
+      marginBottom: 12
+    }
+  }, label), ...children);
+  const pctText = r => r.level === 1 ? `under ${r.toPct}%` : r.level === 5 ? `${r.fromPct}% and over` : `${r.fromPct}–${r.toPct - 1}%`;
+  const ptsText = r => r.empty ? "no total lands here" : r.fromPts === r.toPts ? `${r.fromPts} pts` : `${r.fromPts}–${r.toPts} pts`;
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
+    title: drill ? "EDIT DRILL" : "NEW DRILL",
+    subtitle: (squads.find(s => s.id === squadId) || {}).name,
+    onBack: onCancel,
+    onSignOut: onSignOut
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 16,
+      display: "flex",
+      flexDirection: "column",
+      gap: 16
+    }
+  }, section("Basics", !drill && squads.length > 1 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: fieldLabelStyle,
+    htmlFor: "drill-squad"
+  }, "Squad"), /*#__PURE__*/React.createElement("select", {
+    id: "drill-squad",
+    value: squadId,
+    onChange: e => {
+      setSquadId(e.target.value);
+      setAttributeId("");
+    },
+    style: inputStyle
+  }, squads.map(s => /*#__PURE__*/React.createElement("option", {
+    key: s.id,
+    value: s.id
+  }, s.name)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: fieldLabelStyle,
+    htmlFor: "drill-name"
+  }, "Drill name"), /*#__PURE__*/React.createElement("input", {
+    id: "drill-name",
+    value: name,
+    onChange: e => setName(e.target.value),
+    placeholder: "e.g. Push pass to target",
+    style: inputStyle
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    style: fieldLabelStyle,
+    htmlFor: "drill-attribute"
+  }, "Attribute it scores"), /*#__PURE__*/React.createElement("select", {
+    id: "drill-attribute",
+    value: attributeId,
+    onChange: e => setAttributeId(e.target.value),
+    style: inputStyle
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Choose an attribute…"), squadAttributes.map(a => /*#__PURE__*/React.createElement("option", {
+    key: a.id,
+    value: a.id
+  }, CATEGORY_LABELS[a.category || "attitude"], ": ", a.name))))), section("Number of attempts", /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => stepAttempts(-1),
+    className: "press",
+    style: {
+      ...secondaryButtonStyle,
+      width: 48,
+      padding: 0,
+      fontSize: 20
+    },
+    "aria-label": "One fewer attempt"
+  }, "−"), /*#__PURE__*/React.createElement("input", {
+    value: attempts,
+    onChange: e => setAttempts(e.target.value),
+    inputMode: "numeric",
+    "aria-label": "Number of attempts",
+    style: {
+      ...inputStyle,
+      width: 80,
+      textAlign: "center",
+      fontSize: 18,
+      fontWeight: 700
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: () => stepAttempts(1),
+    className: "press",
+    style: {
+      ...secondaryButtonStyle,
+      width: 48,
+      padding: 0,
+      fontSize: 20
+    },
+    "aria-label": "One more attempt"
+  }, "+"))), section("Result buttons", /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#6B7C8C",
+      margin: "-4px 0 10px"
+    }
+  }, "One button per possible outcome of an attempt, with the points it's worth."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 8
+    }
+  }, results.map((r, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    value: r.label,
+    onChange: e => updateResult(i, "label", e.target.value),
+    placeholder: "Label",
+    "aria-label": `Result ${i + 1} label`,
+    style: {
+      ...inputStyle,
+      flex: 1,
+      minWidth: 0
+    }
+  }), /*#__PURE__*/React.createElement("input", {
+    value: r.points,
+    onChange: e => updateResult(i, "points", e.target.value),
+    inputMode: "numeric",
+    "aria-label": `Result ${i + 1} points`,
+    style: {
+      ...inputStyle,
+      width: 64,
+      textAlign: "center"
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: "#6B7C8C",
+      width: 22
+    }
+  }, "pts"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setResults(results.filter((_, j) => j !== i)),
+    disabled: results.length <= 1,
+    className: "press",
+    style: {
+      ...secondaryButtonStyle,
+      width: 44,
+      padding: 0,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      opacity: results.length <= 1 ? 0.4 : 1
+    },
+    "aria-label": `Remove result ${i + 1}`
+  }, /*#__PURE__*/React.createElement(X, {
+    size: 16
+  })))), results.length < DRILL_LIMITS.maxResults && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setResults([...results, {
+      label: "",
+      points: "0"
+    }]),
+    className: "press",
+    style: {
+      ...secondaryButtonStyle,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+      borderStyle: "dashed"
+    }
+  }, /*#__PURE__*/React.createElement(Plus, {
+    size: 16
+  }), " Add result"))), section("Retake", /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      minHeight: 44,
+      fontSize: 14,
+      color: TOKENS.turf,
+      cursor: "pointer"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: retakeEnabled,
+    onChange: e => setRetakeEnabled(e.target.checked),
+    style: {
+      width: 22,
+      height: 22,
+      accentColor: TOKENS.turf
+    }
+  }), "Allow retakes (a retaken attempt isn't counted)"), retakeEnabled && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: fieldLabelStyle,
+    htmlFor: "drill-retake-label"
+  }, "Retake button label"), /*#__PURE__*/React.createElement("input", {
+    id: "drill-retake-label",
+    value: retakeLabel,
+    onChange: e => setRetakeLabel(e.target.value),
+    placeholder: "e.g. Fumbled – retake",
+    style: inputStyle
+  }))), section("Quick tags", /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#6B7C8C",
+      margin: "-4px 0 10px"
+    }
+  }, "Optional labels a coach can tap on the result screen, e.g. “Weak side”."), tags.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 8,
+      marginBottom: 10
+    }
+  }, tags.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t,
+    onClick: () => setTags(tags.filter(x => x !== t)),
+    className: "press",
+    style: {
+      ...secondaryButtonStyle,
+      minHeight: 36,
+      padding: "0 10px",
+      borderRadius: 999,
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      fontSize: 13
+    },
+    "aria-label": `Remove tag ${t}`
+  }, t, /*#__PURE__*/React.createElement(X, {
+    size: 13
+  })))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    value: tagDraft,
+    onChange: e => setTagDraft(e.target.value),
+    onKeyDown: e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        addTag();
+      }
+    },
+    placeholder: "New tag",
+    "aria-label": "New tag",
+    style: {
+      ...inputStyle,
+      flex: 1,
+      minWidth: 0
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: addTag,
+    className: "press",
+    style: secondaryButtonStyle
+  }, "Add"))), section("Level cut-offs", /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#6B7C8C",
+      margin: "-4px 0 10px"
+    }
+  }, "The percentage of the maximum total needed for each level."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 8
+    }
+  }, SCORE_SCALE.slice(1).map((l, i) => /*#__PURE__*/React.createElement("div", {
+    key: l.value,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1,
+      fontSize: 14,
+      color: TOKENS.turf
+    }
+  }, l.value, " ", l.label, " from"), /*#__PURE__*/React.createElement("input", {
+    value: cutoffs[i],
+    onChange: e => setCutoffs(cutoffs.map((c, j) => j === i ? e.target.value : c)),
+    inputMode: "numeric",
+    "aria-label": `${l.label} cut-off percentage`,
+    style: {
+      ...inputStyle,
+      width: 72,
+      textAlign: "center"
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 14,
+      color: TOKENS.turf,
+      width: 16
+    }
+  }, "%")))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 16,
+      paddingTop: 12,
+      borderTop: "1px solid rgba(11,61,98,0.08)"
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      fontWeight: 600,
+      textTransform: "uppercase",
+      margin: "0 0 8px",
+      color: "#6B7C8C"
+    }
+  }, "Preview", ranges ? ` · maximum ${drillMaxTotal(config)} points` : ""), ranges ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 6
+    }
+  }, ranges.slice().reverse().map(r => {
+    const lvl = levelFor(r.level);
+    return /*#__PURE__*/React.createElement("div", {
+      key: r.level,
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        fontSize: 13,
+        color: TOKENS.turf,
+        opacity: r.empty ? 0.55 : 1
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        width: 92,
+        flexShrink: 0,
+        textAlign: "center",
+        fontSize: 12,
+        fontWeight: 700,
+        padding: "3px 8px",
+        borderRadius: 999,
+        background: lvl.color,
+        color: lvl.text
+      }
+    }, lvl.label), /*#__PURE__*/React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }, pctText(r)), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 600,
+        textAlign: "right"
+      }
+    }, ptsText(r)));
+  })) : /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: "#6B7C8C",
+      margin: 0
+    }
+  }, "Fix the settings above to see the points ranges."))), problems.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      borderRadius: 12,
+      padding: 12,
+      background: "rgba(242,169,59,0.15)",
+      fontSize: 13,
+      color: TOKENS.turf
+    }
+  }, problems.map(p => /*#__PURE__*/React.createElement("div", {
+    key: p
+  }, "• ", p))), /*#__PURE__*/React.createElement("button", {
+    onClick: () => onSave({
+      id: drill ? drill.id : null,
+      squad_id: squadId,
+      name: name.trim(),
+      attribute_id: attributeId,
+      config
+    }),
+    disabled: problems.length > 0 || saving,
+    className: "press",
+    style: {
+      ...primaryButtonStyle,
+      opacity: problems.length > 0 || saving ? 0.5 : 1
+    }
+  }, saving ? "Saving…" : drill ? "Save changes" : "Create drill"), /*#__PURE__*/React.createElement("button", {
+    onClick: onCancel,
+    className: "press",
+    style: {
+      ...secondaryButtonStyle,
+      width: "100%"
+    }
+  }, "Cancel")));
+}
+
+/* ---------------- Run a drill ---------------- */
+
+function DrillRunner({
+  drill,
+  player,
+  attributeName,
+  onBack,
+  onSave,
+  onSignOut,
+  saving
+}) {
+  const config = drill.config;
+  // Every tap is kept in order, so Undo can step back through attempts and retakes alike.
+  const [actions, setActions] = useState([]);
+  const [tags, setTags] = useState([]);
+  const [note, setNote] = useState("");
+  const attempts = actions.filter(a => a.type === "attempt");
+  const retakes = actions.length - attempts.length;
+  const done = attempts.length >= config.attempts;
+  const total = attempts.reduce((sum, a) => sum + a.points, 0);
+  const maxTotal = drillMaxTotal(config);
+  const level = drillLevel(total, maxTotal, config.cutoffs);
+  const lvl = levelFor(level);
+  const pct = maxTotal > 0 ? Math.round(total * 100 / maxTotal) : 0;
+  const record = result => {
+    if (!done) setActions([...actions, {
+      type: "attempt",
+      points: result.points,
+      label: result.label
+    }]);
+  };
+  const undo = () => setActions(actions.slice(0, -1));
+  const leave = () => {
+    if (actions.length > 0 && !window.confirm("Leave this drill? The attempts recorded so far won't be saved.")) return;
+    onBack();
+  };
+  const markers = /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 6,
+      justifyContent: "center"
+    },
+    "aria-label": `${attempts.length} of ${config.attempts} attempts recorded`
+  }, Array.from({
+    length: config.attempts
+  }, (_, i) => {
+    const a = attempts[i];
+    const isCurrent = i === attempts.length;
+    return /*#__PURE__*/React.createElement("div", {
+      key: i,
+      title: a ? `${a.label} (${a.points} pts)` : undefined,
+      style: {
+        width: 28,
+        height: 28,
+        borderRadius: 999,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: 12,
+        fontWeight: 700,
+        background: a ? TOKENS.turf : "#fff",
+        color: TOKENS.chalk,
+        border: isCurrent ? `2px solid ${TOKENS.amber}` : a ? `2px solid ${TOKENS.turf}` : "2px solid rgba(11,61,98,0.15)"
+      }
+    }, a ? a.points : "");
+  }));
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
+    title: drill.name,
+    subtitle: `${player.name} · ${attributeName}`,
+    onBack: leave,
+    onSignOut: onSignOut
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 16,
+      display: "flex",
+      flexDirection: "column",
+      gap: 16
+    }
+  }, !done ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...cardBase,
+      padding: 16,
+      textAlign: "center"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-display",
+    style: {
+      fontSize: 28,
+      fontWeight: 700,
+      color: TOKENS.turf,
+      marginBottom: 12
+    },
+    "aria-live": "polite"
+  }, "Attempt ", attempts.length + 1, " of ", config.attempts), markers, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "#6B7C8C",
+      marginTop: 12
+    }
+  }, "Running total: ", total, " / ", maxTotal, retakes > 0 ? ` · ${retakes} retake${retakes === 1 ? "" : "s"}` : "")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: config.results.length === 1 ? "1fr" : "1fr 1fr",
+      gap: 10
+    }
+  }, config.results.map((r, i) => /*#__PURE__*/React.createElement("button", {
+    key: i,
+    onClick: () => record(r),
+    className: "press",
+    "aria-label": `${r.label}, ${r.points} point${r.points === 1 ? "" : "s"}`,
+    style: {
+      minHeight: 72,
+      borderRadius: 12,
+      border: `2px solid ${TOKENS.turf}`,
+      background: "#fff",
+      color: TOKENS.turf,
+      padding: "8px 6px",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 4
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 16,
+      fontWeight: 700
+    }
+  }, r.label), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: "#4A5B68"
+    }
+  }, r.points, " pt", r.points === 1 ? "" : "s")))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: undo,
+    disabled: actions.length === 0,
+    className: "press",
+    style: {
+      ...secondaryButtonStyle,
+      flex: 1,
+      minHeight: 48,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+      opacity: actions.length === 0 ? 0.4 : 1
+    }
+  }, /*#__PURE__*/React.createElement(Undo, {
+    size: 16
+  }), " Undo"), config.retake_enabled && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setActions([...actions, {
+      type: "retake"
+    }]),
+    className: "press",
+    style: {
+      ...secondaryButtonStyle,
+      flex: 1,
+      minHeight: 48
+    }
+  }, config.retake_label))) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...cardBase,
+      padding: 16,
+      textAlign: "center"
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      ...sectionLabelStyle,
+      marginBottom: 8
+    }
+  }, "Result"), /*#__PURE__*/React.createElement("div", {
+    className: "font-display",
+    style: {
+      fontSize: 40,
+      fontWeight: 700,
+      color: TOKENS.turf,
+      lineHeight: 1.1
+    }
+  }, total, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 22,
+      color: "#6B7C8C"
+    }
+  }, " / ", maxTotal)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: "#4A5B68",
+      margin: "4px 0 12px"
+    }
+  }, pct, "%", retakes > 0 ? ` · ${retakes} retake${retakes === 1 ? "" : "s"}` : ""), /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "inline-block",
+      fontSize: 14,
+      fontWeight: 700,
+      padding: "6px 14px",
+      borderRadius: 999,
+      background: lvl.color,
+      color: lvl.text,
+      marginBottom: 12
+    }
+  }, level, " · ", lvl.label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement(SegmentBar, {
+    value: level
+  })), markers), config.tags.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      ...sectionLabelStyle,
+      marginBottom: 8
+    }
+  }, "Tags (optional)"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 8
+    }
+  }, config.tags.map(t => {
+    const on = tags.includes(t);
+    return /*#__PURE__*/React.createElement("button", {
+      key: t,
+      onClick: () => setTags(on ? tags.filter(x => x !== t) : [...tags, t]),
+      className: "press",
+      "aria-pressed": on,
+      style: {
+        ...secondaryButtonStyle,
+        borderRadius: 999,
+        background: on ? TOKENS.turf : "#fff",
+        borderColor: on ? TOKENS.turf : "rgba(11,61,98,0.2)",
+        color: on ? TOKENS.chalk : TOKENS.turf,
+        display: "flex",
+        alignItems: "center",
+        gap: 6
+      }
+    }, on && /*#__PURE__*/React.createElement(Check, {
+      size: 14
+    }), t);
+  }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    htmlFor: "drill-note",
+    style: {
+      ...sectionLabelStyle,
+      display: "block",
+      marginBottom: 8
+    }
+  }, "Note (optional)"), /*#__PURE__*/React.createElement("textarea", {
+    id: "drill-note",
+    value: note,
+    onChange: e => setNote(e.target.value),
+    rows: 3,
+    style: {
+      width: "100%",
+      fontSize: 14,
+      borderRadius: 8,
+      border: "1px solid rgba(11,61,98,0.15)",
+      padding: 12,
+      resize: "none"
+    }
+  })), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#6B7C8C",
+      margin: 0
+    }
+  }, "Saving also sets ", attributeName, " to ", /*#__PURE__*/React.createElement("strong", null, lvl.label), " on ", player.name, "'s passport."), /*#__PURE__*/React.createElement("button", {
+    onClick: () => onSave({
+      drill_id: drill.id,
+      player_id: player.id,
+      attempts: attempts.map(a => a.points),
+      retakes,
+      tags,
+      note: note.trim() || null,
+      total,
+      level
+    }),
+    disabled: saving,
+    className: "press",
+    style: {
+      ...primaryButtonStyle,
+      opacity: saving ? 0.6 : 1
+    }
+  }, saving ? "Saving…" : "Save result"), /*#__PURE__*/React.createElement("button", {
+    onClick: undo,
+    className: "press",
+    style: {
+      ...secondaryButtonStyle,
+      width: "100%",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement(Undo, {
+    size: 16
+  }), " Undo last attempt"))));
+}
+
 /* ---------------- Loading / error screens ---------------- */
 
 function CenteredMessage({
@@ -1789,6 +2880,32 @@ const PREVIEW_ATTRIBUTES = [{
   category: "technical",
   sort_order: 36
 }];
+const PREVIEW_DRILLS = [{
+  id: "pd1",
+  squad_id: "preview-squad",
+  name: "Push pass to target",
+  attribute_id: "pa13",
+  config: {
+    attempts: 5,
+    results: [{
+      label: "Middle",
+      points: 3
+    }, {
+      label: "1 stick",
+      points: 2
+    }, {
+      label: "2 sticks",
+      points: 1
+    }, {
+      label: "Outside",
+      points: 0
+    }],
+    retake_enabled: true,
+    retake_label: "Fumbled – retake",
+    tags: ["Weak side", "Under pressure", "Rushed"],
+    cutoffs: [40, 60, 75, 90]
+  }
+}];
 function makePreviewPlayers() {
   return [{
     id: "pp1",
@@ -1854,6 +2971,15 @@ function Dashboard({
   const [selectedPlayerId, setSelectedPlayerId] = useState(null);
   const [cameFrom, setCameFrom] = useState("landing");
   const [saving, setSaving] = useState(false);
+  const [drills, setDrills] = useState([]);
+  const [access, setAccess] = useState({
+    isAdmin: false,
+    leadSquadIds: []
+  });
+  const [editingDrill, setEditingDrill] = useState(null); // null = new drill
+  const [newDrillSquadId, setNewDrillSquadId] = useState(null);
+  const [runningDrillId, setRunningDrillId] = useState(null);
+  const userId = session.user.id;
   const loadData = useCallback(async () => {
     setLoading(true);
     setErrorMsg(null);
@@ -1863,6 +2989,11 @@ function Dashboard({
         [PREVIEW_SQUAD.id]: PREVIEW_ATTRIBUTES
       });
       setPlayers(makePreviewPlayers());
+      setDrills(PREVIEW_DRILLS);
+      setAccess({
+        isAdmin: true,
+        leadSquadIds: []
+      });
       setLoading(false);
       return;
     }
@@ -1943,15 +3074,24 @@ function Dashboard({
         scores: scoresByPlayer[p.id] || {},
         feedback: feedbackByPlayer[p.id] || []
       }));
+      // Drills, and whether this user can set them up. If the drills
+      // migration hasn't been run yet these fail, and the app carries on
+      // without drills rather than showing an error.
+      const [drillRes, profileRes, linkRes] = await Promise.all([sb.from("drills").select("id, squad_id, name, attribute_id, config, created_at").order("name"), sb.from("profiles").select("role").eq("id", userId).maybeSingle(), sb.from("coach_squads").select("squad_id, is_lead").eq("coach_id", userId)]);
       setSquads(squadList);
       setAttributesBySquad(attributesMap);
       setPlayers(fullPlayers);
+      setDrills(drillRes.error ? [] : drillRes.data || []);
+      setAccess({
+        isAdmin: !profileRes.error && !!profileRes.data && profileRes.data.role === "admin",
+        leadSquadIds: linkRes.error ? [] : (linkRes.data || []).filter(r => r.is_lead).map(r => r.squad_id)
+      });
     } catch (e) {
       setErrorMsg(e.message || "Something went wrong loading your data.");
     } finally {
       setLoading(false);
     }
-  }, [previewMode]);
+  }, [previewMode, userId]);
   useEffect(() => {
     loadData();
   }, [loadData]);
@@ -2022,6 +3162,77 @@ function Dashboard({
     }
     await loadData();
   };
+  const handleSaveDrill = async ({
+    id,
+    squad_id,
+    name,
+    attribute_id,
+    config
+  }) => {
+    if (previewMode) {
+      setDrills(prev => id ? prev.map(d => d.id === id ? {
+        ...d,
+        name,
+        attribute_id,
+        config
+      } : d) : [...prev, {
+        id: `pd${Date.now()}`,
+        squad_id,
+        name,
+        attribute_id,
+        config
+      }]);
+      setScreen("drills");
+      return;
+    }
+    setSaving(true);
+    // squad_id is filled in by the database from the attribute.
+    const {
+      error
+    } = id ? await sb.from("drills").update({
+      name,
+      attribute_id,
+      config
+    }).eq("id", id) : await sb.from("drills").insert({
+      name,
+      attribute_id,
+      config
+    });
+    setSaving(false);
+    if (error) {
+      alert("Couldn't save that drill: " + error.message);
+      return;
+    }
+    setScreen("drills");
+    await loadData();
+  };
+  const handleSaveDrillEntry = async entry => {
+    const drill = drills.find(d => d.id === entry.drill_id);
+    if (previewMode) {
+      await handleScoreChange(entry.player_id, drill.attribute_id, entry.level);
+      setScreen("player");
+      return;
+    }
+    setSaving(true);
+    // The database recalculates total and level, and adds the matching score.
+    const {
+      error
+    } = await sb.from("drill_entries").insert({
+      drill_id: entry.drill_id,
+      player_id: entry.player_id,
+      attempts: entry.attempts,
+      retakes: entry.retakes,
+      tags: entry.tags,
+      note: entry.note
+    });
+    setSaving(false);
+    if (error) {
+      alert("Couldn't save that drill result: " + error.message);
+      return;
+    }
+    setScreen("player");
+    await loadData();
+  };
   const openSquad = sq => {
     setSelectedSquadId(sq.id);
     setScreen("squad");
@@ -2035,6 +3246,9 @@ function Dashboard({
   if (errorMsg) return /*#__PURE__*/React.createElement(CenteredMessage, null, "Couldn't load data: ", errorMsg);
   const selectedSquad = squads.find(s => s.id === selectedSquadId);
   const selectedPlayer = players.find(p => p.id === selectedPlayerId);
+  const editableSquads = access.isAdmin ? squads : squads.filter(s => access.leadSquadIds.includes(s.id));
+  const runningDrill = drills.find(d => d.id === runningDrillId);
+  const attributeNameFor = (squadId, id) => ((attributesBySquad[squadId] || []).find(a => a.id === id) || {}).name || "";
   return /*#__PURE__*/React.createElement("div", {
     style: {
       minHeight: "100vh",
@@ -2060,7 +3274,43 @@ function Dashboard({
     players: players,
     onOpenSquad: openSquad,
     onOpenPlayer: id => openPlayer(id, "landing"),
-    onSignOut: onSignOut
+    onSignOut: onSignOut,
+    canSetupDrills: editableSquads.length > 0,
+    onOpenDrillSetup: () => setScreen("drills")
+  }), screen === "drills" && /*#__PURE__*/React.createElement(DrillSetup, {
+    squads: editableSquads,
+    attributesBySquad: attributesBySquad,
+    drills: drills,
+    onBack: () => setScreen("landing"),
+    onSignOut: onSignOut,
+    onNew: squadId => {
+      setEditingDrill(null);
+      setNewDrillSquadId(squadId);
+      setScreen("drillEdit");
+    },
+    onEdit: d => {
+      setEditingDrill(d);
+      setScreen("drillEdit");
+    }
+  }), screen === "drillEdit" && /*#__PURE__*/React.createElement(DrillEditor, {
+    key: editingDrill ? editingDrill.id : `new-${newDrillSquadId}`,
+    squads: editableSquads,
+    attributesBySquad: attributesBySquad,
+    drill: editingDrill,
+    initialSquadId: newDrillSquadId,
+    onCancel: () => setScreen("drills"),
+    onSave: handleSaveDrill,
+    onSignOut: onSignOut,
+    saving: saving
+  }), screen === "runDrill" && runningDrill && selectedPlayer && /*#__PURE__*/React.createElement(DrillRunner, {
+    key: `${runningDrill.id}-${selectedPlayer.id}`,
+    drill: runningDrill,
+    player: selectedPlayer,
+    attributeName: attributeNameFor(runningDrill.squad_id, runningDrill.attribute_id),
+    onBack: () => setScreen("player"),
+    onSave: handleSaveDrillEntry,
+    onSignOut: onSignOut,
+    saving: saving
   }), screen === "squad" && selectedSquad && /*#__PURE__*/React.createElement(SquadDetail, {
     squad: selectedSquad,
     players: players,
@@ -2075,7 +3325,12 @@ function Dashboard({
     onScoreChange: handleScoreChange,
     onAddFeedback: handleAddFeedback,
     onSignOut: onSignOut,
-    saving: saving
+    saving: saving,
+    drills: drills.filter(d => d.squad_id === selectedPlayer.squad_id),
+    onRunDrill: id => {
+      setRunningDrillId(id);
+      setScreen("runDrill");
+    }
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: "auto"
