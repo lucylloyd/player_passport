@@ -592,6 +592,17 @@ function todayLocalDate() {
   const pad = n => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
+// The recorded_at to send for an earlier session date: that date at the
+// current time of day on this device, with its time zone, e.g.
+// "2026-11-08T14:32:05.123Z". Using the time of day (not always midday)
+// keeps several runs entered one after another for the same past date in
+// the order they were entered, so the last one is the current score.
+// Sending the device's time zone means the date can't shift to another day.
+function sessionTimestamp(dateStr) {
+  const now = new Date();
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d, now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds()).toISOString();
+}
 function drillMaxTotal(config) {
   const top = Math.max(0, ...config.results.map(r => r.points));
   return top * config.attempts;
@@ -2995,6 +3006,40 @@ function DrillRunner(props) {
   return isTimedDrill(props.drill.config) ? /*#__PURE__*/React.createElement(TimeDrillRunner, props) : /*#__PURE__*/React.createElement(AttemptDrillRunner, props);
 }
 
+// Shared by both runners, shown at the top before any attempt or time is
+// entered. Defaults to today and can't be in the future. Saved as
+// drill_entries.recorded_at (see sessionTimestamp for an earlier date), and the database
+// copies it to the matching score's scored_at.
+function SessionDateField({
+  sessionDate,
+  setSessionDate,
+  today,
+  dateProblem
+}) {
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    htmlFor: "drill-session-date",
+    style: {
+      ...sectionLabelStyle,
+      display: "block",
+      marginBottom: 8
+    }
+  }, "Session date"), /*#__PURE__*/React.createElement("input", {
+    id: "drill-session-date",
+    type: "date",
+    value: sessionDate,
+    max: today,
+    onChange: e => setSessionDate(e.target.value),
+    style: inputStyle
+  }), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      margin: "6px 0 0",
+      color: dateProblem ? "#B3261E" : "#6B7C8C"
+    },
+    role: dateProblem ? "alert" : undefined
+  }, dateProblem || "Change this if you're entering a past session, e.g. from paper."));
+}
+
 // Shared by both runners: optional quick tags.
 function DrillTagPicker({
   options,
@@ -3118,28 +3163,12 @@ function TimeDrillRunner({
       flexDirection: "column",
       gap: 16
     }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
-    htmlFor: "drill-session-date",
-    style: {
-      ...sectionLabelStyle,
-      display: "block",
-      marginBottom: 8
-    }
-  }, "Session date"), /*#__PURE__*/React.createElement("input", {
-    id: "drill-session-date",
-    type: "date",
-    value: sessionDate,
-    max: today,
-    onChange: e => setSessionDate(e.target.value),
-    style: inputStyle
-  }), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 12,
-      margin: "6px 0 0",
-      color: dateProblem ? "#B3261E" : "#6B7C8C"
-    },
-    role: dateProblem ? "alert" : undefined
-  }, dateProblem || "Change this if you're entering a past session, e.g. from paper.")), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement(SessionDateField, {
+    sessionDate: sessionDate,
+    setSessionDate: setSessionDate,
+    today: today,
+    dateProblem: dateProblem
+  }), /*#__PURE__*/React.createElement("div", {
     style: {
       ...cardBase,
       padding: 16,
@@ -3353,7 +3382,12 @@ function AttemptDrillRunner({
       flexDirection: "column",
       gap: 16
     }
-  }, !done ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement(SessionDateField, {
+    sessionDate: sessionDate,
+    setSessionDate: setSessionDate,
+    today: today,
+    dateProblem: dateProblem
+  }), !done ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
       ...cardBase,
       padding: 16,
@@ -3525,27 +3559,6 @@ function AttemptDrillRunner({
       size: 14
     }), t);
   }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
-    htmlFor: "drill-session-date",
-    style: {
-      ...sectionLabelStyle,
-      display: "block",
-      marginBottom: 8
-    }
-  }, "Session date"), /*#__PURE__*/React.createElement("input", {
-    id: "drill-session-date",
-    type: "date",
-    value: sessionDate,
-    max: today,
-    onChange: e => setSessionDate(e.target.value),
-    style: inputStyle
-  }), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 12,
-      margin: "6px 0 0",
-      color: dateProblem ? "#B3261E" : "#6B7C8C"
-    },
-    role: dateProblem ? "alert" : undefined
-  }, dateProblem || "Change this if you're entering a past session, e.g. from paper.")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     htmlFor: "drill-note",
     style: {
       ...sectionLabelStyle,
@@ -4208,7 +4221,7 @@ function Dashboard({
         time_seconds: timed ? entry.time_seconds : null,
         group_totals: timed ? null : drillGroupTotals(drill.config, entry.attempts),
         level: entry.level,
-        recorded_at: entry.session_date !== todayLocalDate() ? `${entry.session_date}T12:00:00` : new Date().toISOString()
+        recorded_at: entry.session_date !== todayLocalDate() ? sessionTimestamp(entry.session_date) : new Date().toISOString()
       }].sort((a, b) => new Date(a.recorded_at) - new Date(b.recorded_at)));
       await handleScoreChange(entry.player_id, drill.attribute_id, entry.level);
       setScreen("player");
@@ -4230,9 +4243,9 @@ function Dashboard({
       tags: entry.tags,
       note: entry.note,
       // Today: leave it to the database ("now"). An earlier session:
-      // midday on that date, so no time zone can shift it to another day.
+      // that date at the current time of day (see sessionTimestamp).
       ...(entry.session_date !== todayLocalDate() && {
-        recorded_at: `${entry.session_date}T12:00:00`
+        recorded_at: sessionTimestamp(entry.session_date)
       })
     });
     setSaving(false);
