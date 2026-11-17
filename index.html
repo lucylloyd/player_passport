@@ -634,6 +634,12 @@ function drillProblems(name, attributeId, config) {
   if (!attributeId) problems.push("Choose the attribute this drill scores.");
   if (isTimedDrill(config)) return [...problems, ...drillTimeProblems(config)];
   if (!isWhole(config.attempts) || config.attempts < 1 || config.attempts > DRILL_LIMITS.maxAttempts) problems.push(`Number of attempts must be a whole number from 1 to ${DRILL_LIMITS.maxAttempts}.`);
+  if (config.groups) {
+    const g = config.groups;
+    if (g.length < DRILL_GROUP_LIMITS.min || g.length > DRILL_GROUP_LIMITS.max) problems.push(`Use ${DRILL_GROUP_LIMITS.min} to ${DRILL_GROUP_LIMITS.max} groups, or switch groups off.`);
+    if (g.some(x => !x.label.trim())) problems.push("Every group needs a name, e.g. Left.");else if (new Set(g.map(x => x.label.trim().toLowerCase())).size !== g.length) problems.push("Each group needs a different name.");
+    if (g.some(x => !isWhole(x.attempts) || x.attempts < 1 || x.attempts > DRILL_LIMITS.maxAttempts)) problems.push(`Each group's attempts must be a whole number from 1 to ${DRILL_LIMITS.maxAttempts}.`);
+  }
   if (config.results.length < 1) problems.push("Add at least one result button.");
   if (config.results.some(r => !r.label.trim())) problems.push("Every result button needs a label.");
   if (config.results.some(r => !isWhole(r.points) || r.points < 0 || r.points > DRILL_LIMITS.maxPoints)) problems.push(`Points must be whole numbers from 0 to ${DRILL_LIMITS.maxPoints}.`);else if (config.results.length && Math.max(...config.results.map(r => r.points)) <= 0) problems.push("At least one result must be worth more than 0 points.");
@@ -641,6 +647,71 @@ function drillProblems(name, attributeId, config) {
   const c = config.cutoffs;
   if (c.some(v => !isWhole(v) || v < 1 || v > 100) || c.some((v, i) => i > 0 && v <= c[i - 1])) problems.push("Cut-offs must be whole percentages from 1 to 100, each higher than the one before.");
   return problems;
+}
+
+/* ---- Attempt groups ----
+   config.groups = [{label: "Left", attempts: 5}, {label: "Right", attempts: 5}]
+   (optional). config.attempts is still the overall count (the sum).
+   Attempts are in order: the first group's, then the next group's.
+   The database works out the same subtotals (drill_entries_before_insert
+   in migrations/2026-11-17-drill-attempt-groups.sql). */
+const DRILL_GROUP_LIMITS = {
+  min: 2,
+  max: 6
+};
+function drillGroups(config) {
+  return !isTimedDrill(config) && Array.isArray(config.groups) && config.groups.length ? config.groups : null;
+}
+// Which group an attempt (0-based) belongs to, and its number within it.
+function drillGroupAt(groups, index) {
+  let start = 0;
+  for (let g = 0; g < groups.length; g++) {
+    if (index < start + groups[g].attempts) return {
+      group: g,
+      start,
+      within: index - start
+    };
+    start += groups[g].attempts;
+  }
+  return null;
+}
+// [{label, total, max}] from a list of attempt points, or null without groups.
+function drillGroupTotals(config, attemptPoints) {
+  const groups = drillGroups(config);
+  if (!groups) return null;
+  const top = Math.max(0, ...config.results.map(r => r.points));
+  let pos = 0;
+  return groups.map(g => {
+    const total = attemptPoints.slice(pos, pos + g.attempts).reduce((s, p) => s + p, 0);
+    pos += g.attempts;
+    return {
+      label: g.label,
+      total,
+      max: top * g.attempts
+    };
+  });
+}
+// "Left: 12 / 15 · Right: 9 / 15"
+function fmtGroupTotals(groupTotals) {
+  return groupTotals.map(g => `${g.label}: ${g.total} / ${g.max}`).join(" · ");
+}
+// How a drill is run, for lists: "Timed", "Left × 5, Right × 5" or "5 attempts".
+function drillSummary(config) {
+  if (isTimedDrill(config)) return "Timed";
+  const groups = drillGroups(config);
+  return groups ? groups.map(g => `${g.label} × ${g.attempts}`).join(", ") : `${config.attempts} attempts`;
+}
+// "12 Nov"
+function fmtShortDate(iso) {
+  return new Date(iso).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short"
+  });
+}
+// One-line summary of a saved entry: "38 / 45 · 12 Nov" or "1:07 · 12 Nov".
+function fmtDrillEntry(entry, drill) {
+  const result = entry.time_seconds != null ? fmtDuration(Number(entry.time_seconds)) : drill && !isTimedDrill(drill.config) ? `${entry.total} / ${drillMaxTotal(drill.config)}` : levelFor(entry.level).label;
+  return `${result} · ${fmtShortDate(entry.recorded_at)}`;
 }
 
 /* ---- Timed drills ----
@@ -1615,12 +1686,43 @@ function PlayerDetail({
   onSignOut,
   saving,
   drills,
+  drillEntries,
   onRunDrill
 }) {
   const [editingSkill, setEditingSkill] = useState(null);
+  const [drillMenuFor, setDrillMenuFor] = useState(null); // attribute id whose drill menu is open
   const [note, setNote] = useState("");
   const grouped = groupByCategory(attributes);
-  const attributeName = id => (attributes.find(a => a.id === id) || {}).name || "";
+  // The newest saved result from any of these drills (entries are oldest first).
+  const latestEntry = skillDrills => {
+    const ids = new Set(skillDrills.map(d => d.id));
+    for (let i = drillEntries.length - 1; i >= 0; i--) if (ids.has(drillEntries[i].drill_id)) return drillEntries[i];
+    return null;
+  };
+  const runDrillButton = (onClick, label, extra) => /*#__PURE__*/React.createElement("button", {
+    onClick,
+    className: "press",
+    "aria-haspopup": extra ? "menu" : undefined,
+    "aria-expanded": extra ? extra.open : undefined,
+    style: {
+      ...secondaryButtonStyle,
+      minHeight: 40,
+      flexShrink: 0,
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      background: TOKENS.turf,
+      borderColor: TOKENS.turf,
+      color: TOKENS.chalk
+    }
+  }, /*#__PURE__*/React.createElement(Play, {
+    size: 14
+  }), label, extra && /*#__PURE__*/React.createElement(ChevronRight, {
+    size: 14,
+    style: {
+      transform: extra.open ? "rotate(-90deg)" : "rotate(90deg)"
+    }
+  }));
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
     title: player.name,
     subtitle: `${player.squadName} · age ${player.age}`,
@@ -1633,61 +1735,7 @@ function PlayerDetail({
       flexDirection: "column",
       gap: 24
     }
-  }, drills.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
-    style: {
-      ...sectionLabelStyle,
-      marginBottom: 8
-    }
-  }, "Drills"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      flexDirection: "column",
-      gap: 8
-    }
-  }, drills.map(d => /*#__PURE__*/React.createElement("div", {
-    key: d.id,
-    style: {
-      ...cardBase,
-      display: "flex",
-      alignItems: "center",
-      gap: 12,
-      padding: "10px 12px 10px 16px"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 0
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "truncate",
-    style: {
-      fontWeight: 600,
-      fontSize: 14,
-      color: TOKENS.turf
-    }
-  }, d.name), /*#__PURE__*/React.createElement("div", {
-    className: "truncate",
-    style: {
-      fontSize: 12,
-      marginTop: 2,
-      color: "#6B7C8C"
-    }
-  }, attributeName(d.attribute_id), " · ", isTimedDrill(d.config) ? "Timed" : `${d.config.attempts} attempts`)), /*#__PURE__*/React.createElement("button", {
-    onClick: () => onRunDrill(d.id),
-    className: "press",
-    style: {
-      ...secondaryButtonStyle,
-      flexShrink: 0,
-      display: "flex",
-      alignItems: "center",
-      gap: 6,
-      background: TOKENS.turf,
-      borderColor: TOKENS.turf,
-      color: TOKENS.chalk
-    }
-  }, /*#__PURE__*/React.createElement(Play, {
-    size: 14
-  }), " Run drill"))))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
     style: {
       ...sectionLabelStyle,
       marginBottom: 8
@@ -1723,6 +1771,68 @@ function PlayerDetail({
       };
       const lvl = levelFor(rec.value);
       const isEditing = editingSkill === skill.id;
+      // Attributes with a drill are scored by running it, not by hand.
+      const skillDrills = drills.filter(d => d.attribute_id === skill.id);
+      const hasDrill = skillDrills.length > 0;
+      const latest = hasDrill ? latestEntry(skillDrills) : null;
+      const menuOpen = drillMenuFor === skill.id;
+      const drillRow = hasDrill && /*#__PURE__*/React.createElement("div", {
+        style: {
+          padding: "0 16px 12px"
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: "flex",
+          alignItems: "center",
+          gap: 12
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "truncate",
+        style: {
+          flex: 1,
+          minWidth: 0,
+          fontSize: 12,
+          color: "#6B7C8C"
+        }
+      }, latest ? `Latest: ${fmtDrillEntry(latest, skillDrills.find(d => d.id === latest.drill_id))}` : "No drill results yet"), skillDrills.length === 1 ? runDrillButton(() => onRunDrill(skillDrills[0].id), " Run drill") : runDrillButton(() => setDrillMenuFor(menuOpen ? null : skill.id), " Run drill", {
+        open: menuOpen
+      })), menuOpen && /*#__PURE__*/React.createElement("div", {
+        role: "menu",
+        "aria-label": `Drills for ${skill.name}`,
+        style: {
+          marginTop: 8,
+          display: "flex",
+          flexDirection: "column",
+          gap: 6
+        }
+      }, skillDrills.map(d => /*#__PURE__*/React.createElement("button", {
+        key: d.id,
+        role: "menuitem",
+        onClick: () => {
+          setDrillMenuFor(null);
+          onRunDrill(d.id);
+        },
+        className: "press",
+        style: {
+          ...secondaryButtonStyle,
+          minHeight: 44,
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          textAlign: "left"
+        }
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "truncate"
+      }, d.name), /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 12,
+          fontWeight: 500,
+          color: "#6B7C8C",
+          flexShrink: 0
+        }
+      }, drillSummary(d.config))))));
       return /*#__PURE__*/React.createElement("div", {
         key: skill.id,
         style: {
@@ -1770,12 +1880,18 @@ function PlayerDetail({
           background: lvl.color,
           color: lvl.text
         }
-      }, lvl.label)), isEditing && /*#__PURE__*/React.createElement("div", {
+      }, lvl.label)), drillRow, isEditing && /*#__PURE__*/React.createElement("div", {
         style: {
           padding: "4px 16px 16px",
           borderTop: "1px solid rgba(11,61,98,0.08)"
         }
-      }, /*#__PURE__*/React.createElement("p", {
+      }, hasDrill && rec.history.length === 0 && /*#__PURE__*/React.createElement("p", {
+        style: {
+          fontSize: 12,
+          color: "#6B7C8C",
+          margin: "12px 0 0"
+        }
+      }, "No earlier scores yet."), !hasDrill && /*#__PURE__*/React.createElement("p", {
         style: {
           fontSize: 11,
           fontWeight: 600,
@@ -1783,7 +1899,7 @@ function PlayerDetail({
           margin: "12px 0 8px",
           color: "#6B7C8C"
         }
-      }, "Set new score"), /*#__PURE__*/React.createElement("div", {
+      }, "Set new score"), !hasDrill && /*#__PURE__*/React.createElement("div", {
         style: {
           display: "grid",
           gridTemplateColumns: `repeat(${SCORE_SCALE.length}, 1fr)`,
@@ -2084,7 +2200,7 @@ function DrillSetup({
         marginTop: 2,
         color: "#6B7C8C"
       }
-    }, attributeName(sq.id, d.attribute_id), " · ", isTimedDrill(d.config) ? "Timed" : `${d.config.attempts} attempts`, isArchived(sq.id, d.attribute_id) ? " · attribute archived, so it can't be run" : "")), /*#__PURE__*/React.createElement(ChevronRight, {
+    }, attributeName(sq.id, d.attribute_id), " · ", drillSummary(d.config), isArchived(sq.id, d.attribute_id) ? " · attribute archived, so it can't be run" : "")), /*#__PURE__*/React.createElement(ChevronRight, {
       size: 18,
       style: {
         color: "#B9C6D1",
@@ -2130,6 +2246,18 @@ function DrillEditor({
   // Each cut-off as {min, sec} text boxes; index 0 = level 2 ... 3 = level 5.
   const [timeCutoffs, setTimeCutoffs] = useState((startedTimed ? drill.config.time_cutoffs : DEFAULT_TIME_CUTOFFS).map(secondsToMinSec));
   const [attempts, setAttempts] = useState(String(start.attempts));
+  const startGroups = drillGroups(start);
+  const [groupsOn, setGroupsOn] = useState(!!startGroups);
+  const [groups, setGroups] = useState((startGroups || [{
+    label: "Left",
+    attempts: 5
+  }, {
+    label: "Right",
+    attempts: 5
+  }]).map(g => ({
+    label: g.label,
+    attempts: String(g.attempts)
+  })));
   const [results, setResults] = useState(start.results.map(r => ({
     label: r.label,
     points: String(r.points)
@@ -2158,6 +2286,18 @@ function DrillEditor({
     cutoffs: cutoffs.map(toNumber)
   };
   if (!timed && retakeEnabled) config.retake_label = retakeLabel.trim();
+  // With groups, the overall number of attempts is the groups added up.
+  if (!timed && groupsOn) {
+    config.groups = groups.map(g => ({
+      label: g.label.trim(),
+      attempts: toNumber(g.attempts)
+    }));
+    config.attempts = config.groups.reduce((sum, g) => sum + g.attempts, 0);
+  }
+  const updateGroup = (i, field, value) => setGroups(groups.map((g, j) => j === i ? {
+    ...g,
+    [field]: field === "attempts" ? value.replace(/\D/g, "") : value
+  } : g));
   const problems = drillProblems(name, attributeId, config);
   const configOk = drillProblems("ok", "ok", config).length === 0;
   const ranges = configOk && !timed ? drillLevelRanges(config) : null;
@@ -2335,6 +2475,105 @@ function DrillEditor({
       margin: 0
     }
   }, "Fix the times above to see the preview.")));
+  const groupsSwitch = /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      minHeight: 44,
+      fontSize: 14,
+      color: TOKENS.turf,
+      cursor: "pointer",
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: groupsOn,
+    onChange: e => setGroupsOn(e.target.checked),
+    style: {
+      width: 22,
+      height: 22,
+      accentColor: TOKENS.turf
+    }
+  }), "Split into groups (e.g. Left × 5, Right × 5)");
+  const groupsEditor = /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 8
+    }
+  }, groups.map((g, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    value: g.label,
+    onChange: e => updateGroup(i, "label", e.target.value),
+    placeholder: "Group name",
+    "aria-label": `Group ${i + 1} name`,
+    style: {
+      ...inputStyle,
+      flex: 1,
+      minWidth: 0
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    "aria-hidden": "true",
+    style: {
+      fontSize: 14,
+      color: "#6B7C8C"
+    }
+  }, "×"), /*#__PURE__*/React.createElement("input", {
+    value: g.attempts,
+    onChange: e => updateGroup(i, "attempts", e.target.value),
+    inputMode: "numeric",
+    "aria-label": `Group ${i + 1} attempts`,
+    style: {
+      ...inputStyle,
+      width: 64,
+      textAlign: "center"
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setGroups(groups.filter((_, j) => j !== i)),
+    disabled: groups.length <= DRILL_GROUP_LIMITS.min,
+    className: "press",
+    style: {
+      ...secondaryButtonStyle,
+      width: 44,
+      padding: 0,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      opacity: groups.length <= DRILL_GROUP_LIMITS.min ? 0.4 : 1
+    },
+    "aria-label": `Remove group ${i + 1}`
+  }, /*#__PURE__*/React.createElement(X, {
+    size: 16
+  })))), groups.length < DRILL_GROUP_LIMITS.max && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setGroups([...groups, {
+      label: "",
+      attempts: "5"
+    }]),
+    className: "press",
+    style: {
+      ...secondaryButtonStyle,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+      borderStyle: "dashed"
+    }
+  }, /*#__PURE__*/React.createElement(Plus, {
+    size: 16
+  }), " Add group"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#6B7C8C",
+      margin: "2px 0 0"
+    }
+  }, Number.isInteger(config.attempts) ? `${config.attempts} attempts in total, run in this order. The level comes from the combined total.` : "Fill in each group's attempts."));
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
     title: drill ? "EDIT DRILL" : "NEW DRILL",
     subtitle: (squads.find(s => s.id === squadId) || {}).name,
@@ -2391,7 +2630,7 @@ function DrillEditor({
   }, "Choose an attribute…"), squadAttributes.map(a => /*#__PURE__*/React.createElement("option", {
     key: a.id,
     value: a.id
-  }, CATEGORY_LABELS[a.category || "attitude"], ": ", a.name))))), section("Measurement", measureToggle), !timed && section("Number of attempts",/*#__PURE__*/React.createElement("div", {
+  }, CATEGORY_LABELS[a.category || "attitude"], ": ", a.name))))), section("Measurement", measureToggle), !timed && section("Attempts", groupsSwitch, groupsOn ? groupsEditor : /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -3027,17 +3266,39 @@ function AttemptDrillRunner({
     if (actions.length > 0 && !window.confirm("Leave this drill? The attempts recorded so far won't be saved.")) return;
     onBack();
   };
-  const markers = /*#__PURE__*/React.createElement("div", {
+  // Groups (e.g. Left × 5, Right × 5): which one this attempt is in.
+  const groups = drillGroups(config);
+  const at = groups && !done ? drillGroupAt(groups, attempts.length) : null;
+  const groupTotals = groups ? drillGroupTotals(config, attempts.map(a => a.points)) : null;
+  const markerRow = (from, count, label) => /*#__PURE__*/React.createElement("div", {
+    key: from,
     style: {
       display: "flex",
       flexWrap: "wrap",
       gap: 6,
-      justifyContent: "center"
+      justifyContent: "center",
+      alignItems: "center"
+    }
+  }, label && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      color: "#4A5B68",
+      minWidth: 44,
+      textAlign: "right"
+    }
+  }, label), Array.from({
+    length: count
+  }, (_, k) => marker(from + k)));
+  const markers = /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 8
     },
     "aria-label": `${attempts.length} of ${config.attempts} attempts recorded`
-  }, Array.from({
-    length: config.attempts
-  }, (_, i) => {
+  }, groups ? groups.map((g, gi) => markerRow(groups.slice(0, gi).reduce((s, x) => s + x.attempts, 0), g.attempts, g.label)) : markerRow(0, config.attempts));
+  function marker(i) {
     const a = attempts[i];
     const isCurrent = i === attempts.length;
     return /*#__PURE__*/React.createElement("div", {
@@ -3057,7 +3318,7 @@ function AttemptDrillRunner({
         border: isCurrent ? `2px solid ${TOKENS.amber}` : a ? `2px solid ${TOKENS.turf}` : "2px solid rgba(11,61,98,0.15)"
       }
     }, a ? a.points : "");
-  }));
+  }
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
     title: drill.name,
     subtitle: `${player.name} · ${attributeName}`,
@@ -3085,7 +3346,7 @@ function AttemptDrillRunner({
       marginBottom: 12
     },
     "aria-live": "polite"
-  }, "Attempt ", attempts.length + 1, " of ", config.attempts), markers, /*#__PURE__*/React.createElement("div", {
+  }, at ? `${groups[at.group].label} · attempt ${at.within + 1} of ${groups[at.group].attempts}` : `Attempt ${attempts.length + 1} of ${config.attempts}`), markers, /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: "#6B7C8C",
@@ -3186,7 +3447,14 @@ function AttemptDrillRunner({
       color: "#4A5B68",
       margin: "4px 0 12px"
     }
-  }, pct, "%", retakes > 0 ? ` · ${retakes} retake${retakes === 1 ? "" : "s"}` : ""), /*#__PURE__*/React.createElement("span", {
+  }, pct, "%", retakes > 0 ? ` · ${retakes} retake${retakes === 1 ? "" : "s"}` : ""), groupTotals && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      color: TOKENS.turf,
+      margin: "-4px 0 12px"
+    }
+  }, fmtGroupTotals(groupTotals)), /*#__PURE__*/React.createElement("span", {
     style: {
       display: "inline-block",
       fontSize: 14,
@@ -3508,6 +3776,70 @@ const PREVIEW_DRILLS = [{
     tags: ["Wet pitch", "Headwind"],
     time_cutoffs: [80, 72, 66, 60]
   }
+}, {
+  id: "pd3",
+  squad_id: "preview-squad",
+  name: "Push pass both sides",
+  attribute_id: "pa13",
+  config: {
+    measure: "attempts",
+    attempts: 6,
+    groups: [{
+      label: "Left",
+      attempts: 3
+    }, {
+      label: "Right",
+      attempts: 3
+    }],
+    results: [{
+      label: "Middle",
+      points: 3
+    }, {
+      label: "1 stick",
+      points: 2
+    }, {
+      label: "Outside",
+      points: 0
+    }],
+    retake_enabled: false,
+    retake_label: "Retake",
+    tags: [],
+    cutoffs: [30, 50, 70, 80]
+  }
+}];
+// Past drill results for the demo players, oldest first.
+const PREVIEW_DRILL_ENTRIES = [{
+  drill_id: "pd1",
+  player_id: "pp1",
+  total: 13,
+  time_seconds: null,
+  group_totals: null,
+  level: 4,
+  recorded_at: "2026-11-05T12:00:00"
+}, {
+  drill_id: "pd2",
+  player_id: "pp1",
+  total: null,
+  time_seconds: 67,
+  group_totals: null,
+  level: 3,
+  recorded_at: "2026-11-10T12:00:00"
+}, {
+  drill_id: "pd3",
+  player_id: "pp1",
+  total: 14,
+  time_seconds: null,
+  group_totals: [{
+    label: "Left",
+    total: 6,
+    max: 9
+  }, {
+    label: "Right",
+    total: 8,
+    max: 9
+  }],
+  level: 4,
+  recorded_at: "2026-11-12T12:00:00"
 }];
 function makePreviewPlayers() {
   return [{
@@ -3575,6 +3907,7 @@ function Dashboard({
   const [cameFrom, setCameFrom] = useState("landing");
   const [saving, setSaving] = useState(false);
   const [drills, setDrills] = useState([]);
+  const [drillEntries, setDrillEntries] = useState([]); // oldest first
   const [access, setAccess] = useState({
     isAdmin: false,
     leadSquadIds: []
@@ -3593,6 +3926,7 @@ function Dashboard({
       });
       setPlayers(makePreviewPlayers());
       setDrills(PREVIEW_DRILLS);
+      setDrillEntries(PREVIEW_DRILL_ENTRIES);
       setAccess({
         isAdmin: true,
         leadSquadIds: []
@@ -3687,10 +4021,29 @@ function Dashboard({
       // migration hasn't been run yet these fail, and the app carries on
       // without drills rather than showing an error.
       const [drillRes, profileRes, linkRes] = await Promise.all([sb.from("drills").select("id, squad_id, name, attribute_id, config, created_at").order("name"), sb.from("profiles").select("role").eq("id", userId).maybeSingle(), sb.from("coach_squads").select("squad_id, is_lead").eq("coach_id", userId)]);
+      // Past drill results, for the "latest result" line on each
+      // attribute card. group_totals only exists once the attempt
+      // groups migration has run, so fall back without it.
+      let entryRows = [];
+      if (playerIds.length && !drillRes.error) {
+        const fetchEntries = columns => sb.from("drill_entries").select(columns).in("player_id", playerIds).order("recorded_at", {
+          ascending: true
+        });
+        let {
+          data,
+          error
+        } = await fetchEntries("drill_id, player_id, total, time_seconds, group_totals, level, recorded_at");
+        if (error) ({
+          data,
+          error
+        } = await fetchEntries("drill_id, player_id, total, time_seconds, level, recorded_at"));
+        entryRows = error ? [] : data || [];
+      }
       setSquads(squadList);
       setAttributesBySquad(attributesMap);
       setPlayers(fullPlayers);
       setDrills(drillRes.error ? [] : drillRes.data || []);
+      setDrillEntries(entryRows);
       setAccess({
         isAdmin: !profileRes.error && !!profileRes.data && profileRes.data.role === "admin",
         leadSquadIds: linkRes.error ? [] : (linkRes.data || []).filter(r => r.is_lead).map(r => r.squad_id)
@@ -3818,6 +4171,16 @@ function Dashboard({
   const handleSaveDrillEntry = async entry => {
     const drill = drills.find(d => d.id === entry.drill_id);
     if (previewMode) {
+      const timed = isTimedDrill(drill.config);
+      setDrillEntries(prev => [...prev, {
+        drill_id: drill.id,
+        player_id: entry.player_id,
+        total: timed ? null : entry.total,
+        time_seconds: timed ? entry.time_seconds : null,
+        group_totals: timed ? null : drillGroupTotals(drill.config, entry.attempts),
+        level: entry.level,
+        recorded_at: entry.session_date !== todayLocalDate() ? `${entry.session_date}T12:00:00` : new Date().toISOString()
+      }].sort((a, b) => new Date(a.recorded_at) - new Date(b.recorded_at)));
       await handleScoreChange(entry.player_id, drill.attribute_id, entry.level);
       setScreen("player");
       return;
@@ -3982,6 +4345,7 @@ function Dashboard({
     onSignOut: onSignOut,
     saving: saving,
     drills: drills.filter(d => d.squad_id === selectedPlayer.squad_id && activeAttributeIds.has(d.attribute_id)),
+    drillEntries: drillEntries.filter(e => e.player_id === selectedPlayer.id),
     onRunDrill: id => {
       setRunningDrillId(id);
       setScreen("runDrill");
