@@ -41,8 +41,9 @@ The owner (Lucy) is learning as she goes. Read **Working rules** before making a
 
 ## Scoring scale and categories
 
-- Every attribute is scored on one 5-level scale: 1 Not yet, 2 Developing, 3 Solid, 4 Strong, 5 Excellent. The database rejects any other value (see `scores` below).
-- The level names are set in one place, `SCORE_LEVEL_LABELS`. Colours are in `SCORE_SCALE`. Each level has a `color` (badge and bar) and a `text` colour chosen for at least 4.5:1 contrast, so check contrast if you change a colour.
+- Every attribute is scored on one 5-level scale: 1 Starting, 2 Developing, 3 Solid, 4 Strong, 5 Excellent. The database rejects any other value (see `scores` below). ("Not yet scored" is a separate label for an attribute with no score at all.)
+- The level names are set in one place, `SCORE_LEVEL_LABELS`. Colours are in `SCORE_SCALE`: 1 `#F4B183`, 2 `#F6D27A`, 3 `#CFE29C`, 4 `#7FC79A`, 5 `#237A5E`. Each level has a `color` (badge and bar) and a `text` colour: navy `#0B3B5F` on levels 1–4 and white on level 5, all at least 4.5:1 contrast. Check contrast if you change a colour. For small grey text, use `#4A5B68`; the lighter `#6B7C8C` is under 4.5:1 on white and on the page background.
+- Squad overview (`AttributeSegmentBar`): one segment per attribute in its level colour. An unscored segment is white with a dashed `#9AA6B2` outline (`UNSCORED_OUTLINE`), never a grey fill, so it can't be mistaken for a low score. The squad page has a key: `LevelKey` beside the "Squad" heading, and a "Dashed = not scored yet" line under the player cards. The player page and drill results use `LevelBar`, one continuous bar.
 - An older 3-level "outcomes" scale and an "Outcomes" category were removed on 2026-11-12. They were only ever used in the demo data.
 - Attribute categories must be one of `attitude`, `tactical`, `technical` or `physical`, in lowercase (`CATEGORY_ORDER`). **An attribute with any other category won't appear in the app.** If it has no category, it shows under Attitude.
 
