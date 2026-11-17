@@ -56,12 +56,17 @@ The owner (Lucy) is learning as she goes. Read **Working rules** before making a
   - Level = 1 + the number of time cut-offs where `time_seconds ≤ cutoff`. This rule is in both `drill_time_level()` (SQL) and `drillTimeLevel()` (app). Keep them the same.
   - Timed entries store the time in `drill_entries.time_seconds`, with `attempts = []`, `retakes = 0` and `total` empty. Attempt entries have `time_seconds` empty.
   - Once a drill has entries, it can't be switched between Attempts and Time.
+- **Attempt groups:** an attempts drill can split its attempts into 2–6 named groups, e.g. `config.groups = [{label: "Left", attempts: 5}, {label: "Right", attempts: 5}]`. `config.attempts` is still the overall count and must equal the groups added up. Attempts run in group order (the first 5 are Left, the next 5 Right). Timed drills can't have groups.
+  - One run makes one entry and one score. Its `total` and `level` come from all attempts together, as for any attempts drill.
+  - The database also stores each group's subtotal in `drill_entries.group_totals`, e.g. `[{label: "Left", total: 12, max: 15}, …]`. The app works out the same thing in `drillGroupTotals()` for the result screen ("Left: 12 / 15 · Right: 9 / 15").
+  - ESM Goalies' "Movement into kicking LH" and "RH" drills (neither had been run) were replaced on 2026-11-17 by one grouped drill, "Movement into kicking" (Left × 5, Right × 5).
 - When a `drill_entries` row is inserted, triggers check it, **recalculate `total` and `level`** (ignoring what the app sent), and insert the matching `scores` row. The app only inserts `drill_id`, `player_id`, `attempts` and `retakes` (or `time_seconds` for a timed drill), `tags` and `note`.
 - **Session date:** the runner has a date field that defaults to today and can't be in the future. For an earlier date, the app sends `recorded_at` as midday on that date. The database rejects future dates, and the score's `scored_at` gets the same value, so backdated sessions slot into the history in date order. A backdated result older than the latest score won't change the current score.
 - Drills can't be run on an archived attribute. The database refuses, and the app hides those drills.
 - Once a drill has entries, its attribute can't be changed, and it can't be deleted (`on delete restrict`). Deleting an attribute that has drill entries is therefore blocked too.
-- Screens: "Drill setup" (`DrillSetup` and `DrillEditor`), shown to admins and squad leads, and "Run drill" on a player's page (`DrillRunner`, which shows `AttemptDrillRunner` or `TimeDrillRunner`).
-- Not built yet: attempt groups.
+- Screens: "Drill setup" (`DrillSetup` and `DrillEditor`), shown to admins and squad leads, and the drill runner (`DrillRunner`, which shows `AttemptDrillRunner` or `TimeDrillRunner`).
+- **On the player page, drills sit inside their attribute's card.** An attribute with a drill shows a "Run drill" button and the latest result in small text (`fmtDrillEntry()`, e.g. "38 / 45 · 12 Nov" or "1:07 · 12 Nov"), **instead of** the manual rating buttons. If several drills feed one attribute, "Run drill" opens a small menu. Attributes with no drill keep the manual rating.
+- The app loads `drill_entries` for the latest-result line (`drillEntries` in `Dashboard`, oldest first). Preview mode uses `PREVIEW_DRILL_ENTRIES`.
 - To make a coach a squad lead, set `coach_squads.is_lead = true` for that coach and squad in the SQL Editor. Only admins can change it.
 
 ## Database tables
@@ -77,7 +82,7 @@ All tables are in the `public` schema, and all IDs are `uuid`.
 | `feedback` | `id`, `player_id`, `note`, `coach_id`, `created_at` | |
 | `coach_squads` | `coach_id`, `squad_id`, `is_lead` | Links coaches (`auth.users.id`) to squads. **This table controls who sees what.** `is_lead` lets that coach set up drills for that squad. |
 | `drills` | `id`, `squad_id`, `name`, `attribute_id`, `config` (jsonb), `created_by`, `created_at` | See **Drills** above. |
-| `drill_entries` | `id`, `drill_id`, `player_id`, `attempts` (jsonb list of points), `retakes`, `tags` (text[]), `note`, `total` (empty for timed drills), `time_seconds` (numeric, timed drills only), `level`, `recorded_by`, `recorded_at` | Like `scores`, only new rows are added. Each one also adds a `scores` row. |
+| `drill_entries` | `id`, `drill_id`, `player_id`, `attempts` (jsonb list of points), `retakes`, `tags` (text[]), `note`, `total` (empty for timed drills), `time_seconds` (numeric, timed drills only), `group_totals` (jsonb, grouped drills only), `level`, `recorded_by`, `recorded_at` | Like `scores`, only new rows are added. Each one also adds a `scores` row. |
 | `profiles` | `id`, `email`, `role` | One row per user. A user is an admin when `role = 'admin'`. |
 
 ## RLS policies
@@ -103,7 +108,7 @@ The pattern used throughout: **`is_admin()` OR the row belongs to a squad listed
 | `drills` | DELETE | Admin only. |
 | `drill_entries` | SELECT, INSERT | Admin, or a coach of the player's squad. |
 
-RLS policies apply to whole rows, so a new column on an existing table (like `drill_entries.time_seconds`) is covered by that table's existing policies without any change. RLS tests for drills are in `migrations/2026-11-12-drills-tests.sql`, and for timed drills in `migrations/2026-11-17-timed-drills-tests.sql`. They act as pretend coaches by running `set local role authenticated` and setting `request.jwt.claims`, then stop on purpose so nothing is kept. Follow the same pattern for future security tests.
+RLS policies apply to whole rows, so a new column on an existing table (like `drill_entries.time_seconds`) is covered by that table's existing policies without any change. RLS tests for drills are in `migrations/2026-11-12-drills-tests.sql`, for timed drills in `migrations/2026-11-17-timed-drills-tests.sql`, and for attempt groups in `migrations/2026-11-17-drill-attempt-groups-tests.sql`. They act as pretend coaches by running `set local role authenticated` and setting `request.jwt.claims`, then stop on purpose so nothing is kept. Follow the same pattern for future security tests.
 
 Gaps to be aware of:
 - Nobody, including admins, can update or delete `scores` or `feedback` from the app. Changes to these tables are made in the SQL Editor.
