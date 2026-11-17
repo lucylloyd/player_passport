@@ -41,7 +41,7 @@ The owner (Lucy) is learning as she goes. Read **Working rules** before making a
 
 ## Scoring scale and categories
 
-- Every attribute is scored on one 5-level scale: 1 Not yet, 2 Developing, 3 Secure, 4 Strong, 5 Excellent. The database rejects any other value (see `scores` below).
+- Every attribute is scored on one 5-level scale: 1 Not yet, 2 Developing, 3 Solid, 4 Strong, 5 Excellent. The database rejects any other value (see `scores` below).
 - The level names are set in one place, `SCORE_LEVEL_LABELS`. Colours are in `SCORE_SCALE`. Each level has a `color` (badge and bar) and a `text` colour chosen for at least 4.5:1 contrast, so check contrast if you change a colour.
 - An older 3-level "outcomes" scale and an "Outcomes" category were removed on 2026-11-12. They were only ever used in the demo data.
 - Attribute categories must be one of `attitude`, `tactical`, `technical` or `physical`, in lowercase (`CATEGORY_ORDER`). **An attribute with any other category won't appear in the app.** If it has no category, it shows under Attitude.
@@ -51,12 +51,17 @@ The owner (Lucy) is learning as she goes. Read **Working rules** before making a
 - A drill is a structured test that produces a 1–5 score for **one attribute**. Because attributes belong to one squad, so does each drill: `drills.squad_id` is filled in by the database from the attribute.
 - `drills.config` (jsonb) holds `attempts`, `results` (`[{label, points}]`), `retake_enabled`, `retake_label`, `tags` and `cutoffs`. `cutoffs` holds 4 whole percentages of the maximum total, the minimum for levels 2–5; the default is `[40, 60, 75, 90]`. The database checks this shape with `drill_config_is_valid()`, and the app mirrors it in `drillProblems()`.
 - Level = 1 + the number of cut-offs where `total × 100 ≥ cutoff × max`. This whole-number rule is in both `drill_level()` (SQL) and `drillLevel()` (app). Keep them the same.
-- When a `drill_entries` row is inserted, triggers check it, **recalculate `total` and `level`** (ignoring what the app sent), and insert the matching `scores` row. The app only inserts `drill_id`, `player_id`, `attempts`, `retakes`, `tags` and `note`.
+- **Measurement:** a drill is measured by Attempts (above) or by Time. `config.measure` is `"time"` for a timed drill; missing or `"attempts"` means attempts, so drills made before 2026-11-17 are attempt drills.
+  - A timed drill's config is `{measure: "time", tags, time_cutoffs}`. `time_cutoffs` holds 4 whole numbers of seconds: the slowest time that still gets levels 2–5, so each is smaller than the one before. The default is `[80, 72, 66, 60]` (1:20, 1:12, 1:06, 1:00).
+  - Level = 1 + the number of time cut-offs where `time_seconds ≤ cutoff`. This rule is in both `drill_time_level()` (SQL) and `drillTimeLevel()` (app). Keep them the same.
+  - Timed entries store the time in `drill_entries.time_seconds`, with `attempts = []`, `retakes = 0` and `total` empty. Attempt entries have `time_seconds` empty.
+  - Once a drill has entries, it can't be switched between Attempts and Time.
+- When a `drill_entries` row is inserted, triggers check it, **recalculate `total` and `level`** (ignoring what the app sent), and insert the matching `scores` row. The app only inserts `drill_id`, `player_id`, `attempts` and `retakes` (or `time_seconds` for a timed drill), `tags` and `note`.
 - **Session date:** the runner has a date field that defaults to today and can't be in the future. For an earlier date, the app sends `recorded_at` as midday on that date. The database rejects future dates, and the score's `scored_at` gets the same value, so backdated sessions slot into the history in date order. A backdated result older than the latest score won't change the current score.
 - Drills can't be run on an archived attribute. The database refuses, and the app hides those drills.
 - Once a drill has entries, its attribute can't be changed, and it can't be deleted (`on delete restrict`). Deleting an attribute that has drill entries is therefore blocked too.
-- Screens: "Drill setup" (`DrillSetup` and `DrillEditor`), shown to admins and squad leads, and "Run drill" on a player's page (`DrillRunner`).
-- Not built yet: attempt groups and timed drills.
+- Screens: "Drill setup" (`DrillSetup` and `DrillEditor`), shown to admins and squad leads, and "Run drill" on a player's page (`DrillRunner`, which shows `AttemptDrillRunner` or `TimeDrillRunner`).
+- Not built yet: attempt groups.
 - To make a coach a squad lead, set `coach_squads.is_lead = true` for that coach and squad in the SQL Editor. Only admins can change it.
 
 ## Database tables
@@ -72,7 +77,7 @@ All tables are in the `public` schema, and all IDs are `uuid`.
 | `feedback` | `id`, `player_id`, `note`, `coach_id`, `created_at` | |
 | `coach_squads` | `coach_id`, `squad_id`, `is_lead` | Links coaches (`auth.users.id`) to squads. **This table controls who sees what.** `is_lead` lets that coach set up drills for that squad. |
 | `drills` | `id`, `squad_id`, `name`, `attribute_id`, `config` (jsonb), `created_by`, `created_at` | See **Drills** above. |
-| `drill_entries` | `id`, `drill_id`, `player_id`, `attempts` (jsonb list of points), `retakes`, `tags` (text[]), `note`, `total`, `level`, `recorded_by`, `recorded_at` | Like `scores`, only new rows are added. Each one also adds a `scores` row. |
+| `drill_entries` | `id`, `drill_id`, `player_id`, `attempts` (jsonb list of points), `retakes`, `tags` (text[]), `note`, `total` (empty for timed drills), `time_seconds` (numeric, timed drills only), `level`, `recorded_by`, `recorded_at` | Like `scores`, only new rows are added. Each one also adds a `scores` row. |
 | `profiles` | `id`, `email`, `role` | One row per user. A user is an admin when `role = 'admin'`. |
 
 ## RLS policies
@@ -98,7 +103,7 @@ The pattern used throughout: **`is_admin()` OR the row belongs to a squad listed
 | `drills` | DELETE | Admin only. |
 | `drill_entries` | SELECT, INSERT | Admin, or a coach of the player's squad. |
 
-RLS tests for drills are in `migrations/2026-11-12-drills-tests.sql`. They act as pretend coaches by running `set local role authenticated` and setting `request.jwt.claims`, then stop on purpose so nothing is kept. Follow the same pattern for future security tests.
+RLS policies apply to whole rows, so a new column on an existing table (like `drill_entries.time_seconds`) is covered by that table's existing policies without any change. RLS tests for drills are in `migrations/2026-11-12-drills-tests.sql`, and for timed drills in `migrations/2026-11-17-timed-drills-tests.sql`. They act as pretend coaches by running `set local role authenticated` and setting `request.jwt.claims`, then stop on purpose so nothing is kept. Follow the same pattern for future security tests.
 
 Gaps to be aware of:
 - Nobody, including admins, can update or delete `scores` or `feedback` from the app. Changes to these tables are made in the SQL Editor.

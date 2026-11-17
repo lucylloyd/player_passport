@@ -364,7 +364,8 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
 const {
   useState,
   useEffect,
-  useCallback
+  useCallback,
+  useRef
 } = React;
 
 /* =========================================================
@@ -494,7 +495,7 @@ const TOKENS = {
 const SCORE_LEVEL_LABELS = {
   1: "Not yet",
   2: "Developing",
-  3: "Secure",
+  3: "Solid",
   4: "Strong",
   5: "Excellent"
 };
@@ -631,6 +632,7 @@ function drillProblems(name, attributeId, config) {
   const isWhole = n => Number.isInteger(n);
   if (!name.trim()) problems.push("Give the drill a name.");
   if (!attributeId) problems.push("Choose the attribute this drill scores.");
+  if (isTimedDrill(config)) return [...problems, ...drillTimeProblems(config)];
   if (!isWhole(config.attempts) || config.attempts < 1 || config.attempts > DRILL_LIMITS.maxAttempts) problems.push(`Number of attempts must be a whole number from 1 to ${DRILL_LIMITS.maxAttempts}.`);
   if (config.results.length < 1) problems.push("Add at least one result button.");
   if (config.results.some(r => !r.label.trim())) problems.push("Every result button needs a label.");
@@ -639,6 +641,62 @@ function drillProblems(name, attributeId, config) {
   const c = config.cutoffs;
   if (c.some(v => !isWhole(v) || v < 1 || v > 100) || c.some((v, i) => i > 0 && v <= c[i - 1])) problems.push("Cut-offs must be whole percentages from 1 to 100, each higher than the one before.");
   return problems;
+}
+
+/* ---- Timed drills ----
+   config = { measure: "time", tags, time_cutoffs: [l2, l3, l4, l5] }
+   Each time_cutoff is the SLOWEST time in seconds that still gets that
+   level, so lower is better and each is smaller than the one before.
+   Drills with no "measure" are attempt drills. The database uses the
+   same rule (drill_time_level in migrations/2026-11-17-timed-drills.sql). */
+const DEFAULT_TIME_CUTOFFS = [80, 72, 66, 60]; // 1:20, 1:12, 1:06, 1:00
+const MAX_TIME_SECONDS = 86400; // under 24 hours
+function isTimedDrill(config) {
+  return !!config && config.measure === "time";
+}
+// Level = 1 + the number of cut-offs the time is at or under.
+function drillTimeLevel(seconds, timeCutoffs) {
+  return 1 + timeCutoffs.filter(c => seconds <= c).length;
+}
+// 66 → "1:06", 3725 → "1:02:05"
+function fmtDuration(totalSeconds) {
+  const s = Math.round(totalSeconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor(s % 3600 / 60);
+  const sec = String(s % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+}
+// What each level means in words, for the setup preview.
+function drillTimeRanges(timeCutoffs) {
+  const c = timeCutoffs; // c[0] = level 2 ... c[3] = level 5
+  return SCORE_SCALE.map(l => {
+    const level = l.value;
+    const text = level === 5 ? `${fmtDuration(c[3])} or under` : level === 1 ? `slower than ${fmtDuration(c[0])}` : `${fmtDuration(c[level - 1] + 1)} to ${fmtDuration(c[level - 2])}`;
+    return {
+      level,
+      text
+    };
+  });
+}
+function drillTimeProblems(config) {
+  const c = config.time_cutoffs;
+  if (!Array.isArray(c) || c.length !== 4 || c.some(v => !Number.isInteger(v) || v < 1 || v >= MAX_TIME_SECONDS)) return ["Fill in every cut-off time, with seconds from 0 to 59."];
+  if (c.some((v, i) => i > 0 && v >= c[i - 1])) return ["Each level's time must be faster than the level below it (e.g. Excellent 1:00, Strong 1:06)."];
+  return [];
+}
+// Minutes and seconds boxes → total seconds, or NaN if not valid.
+function minSecToSeconds(min, sec) {
+  const m = min.trim() === "" ? 0 : Number(min);
+  const s = sec.trim() === "" ? 0 : Number(sec);
+  if (min.trim() === "" && sec.trim() === "") return NaN;
+  if (!Number.isInteger(m) || !Number.isInteger(s) || m < 0 || s < 0 || s > 59) return NaN;
+  return m * 60 + s;
+}
+function secondsToMinSec(total) {
+  return {
+    min: String(Math.floor(total / 60)),
+    sec: String(total % 60).padStart(2, "0")
+  };
 }
 const fieldLabelStyle = {
   display: "block",
@@ -1614,7 +1672,7 @@ function PlayerDetail({
       marginTop: 2,
       color: "#6B7C8C"
     }
-  }, attributeName(d.attribute_id), " · ", d.config.attempts, " attempts")), /*#__PURE__*/React.createElement("button", {
+  }, attributeName(d.attribute_id), " · ", isTimedDrill(d.config) ? "Timed" : `${d.config.attempts} attempts`)), /*#__PURE__*/React.createElement("button", {
     onClick: () => onRunDrill(d.id),
     className: "press",
     style: {
@@ -2026,7 +2084,7 @@ function DrillSetup({
         marginTop: 2,
         color: "#6B7C8C"
       }
-    }, attributeName(sq.id, d.attribute_id), " · ", d.config.attempts, " attempts", isArchived(sq.id, d.attribute_id) ? " · attribute archived, so it can't be run" : "")), /*#__PURE__*/React.createElement(ChevronRight, {
+    }, attributeName(sq.id, d.attribute_id), " · ", isTimedDrill(d.config) ? "Timed" : `${d.config.attempts} attempts`, isArchived(sq.id, d.attribute_id) ? " · attribute archived, so it can't be run" : "")), /*#__PURE__*/React.createElement(ChevronRight, {
       size: 18,
       style: {
         color: "#B9C6D1",
@@ -2061,10 +2119,16 @@ function DrillEditor({
   onSignOut,
   saving
 }) {
-  const start = drill ? drill.config : DEFAULT_DRILL_CONFIG;
+  const startedTimed = !!drill && isTimedDrill(drill.config);
+  // Attempt settings start from the defaults for a timed drill, so
+  // switching to Attempts shows sensible values.
+  const start = drill && !startedTimed ? drill.config : DEFAULT_DRILL_CONFIG;
   const [squadId, setSquadId] = useState(drill ? drill.squad_id : initialSquadId);
   const [name, setName] = useState(drill ? drill.name : "");
   const [attributeId, setAttributeId] = useState(drill ? drill.attribute_id : "");
+  const [measure, setMeasure] = useState(startedTimed ? "time" : "attempts");
+  // Each cut-off as {min, sec} text boxes; index 0 = level 2 ... 3 = level 5.
+  const [timeCutoffs, setTimeCutoffs] = useState((startedTimed ? drill.config.time_cutoffs : DEFAULT_TIME_CUTOFFS).map(secondsToMinSec));
   const [attempts, setAttempts] = useState(String(start.attempts));
   const [results, setResults] = useState(start.results.map(r => ({
     label: r.label,
@@ -2072,11 +2136,17 @@ function DrillEditor({
   })));
   const [retakeEnabled, setRetakeEnabled] = useState(start.retake_enabled);
   const [retakeLabel, setRetakeLabel] = useState(start.retake_label);
-  const [tags, setTags] = useState(start.tags);
+  const [tags, setTags] = useState(drill ? drill.config.tags : []);
   const [tagDraft, setTagDraft] = useState("");
   const [cutoffs, setCutoffs] = useState(start.cutoffs.map(String));
   const toNumber = s => s.trim() === "" ? NaN : Number(s);
-  const config = {
+  const timed = measure === "time";
+  const config = timed ? {
+    measure: "time",
+    tags,
+    time_cutoffs: timeCutoffs.map(t => minSecToSeconds(t.min, t.sec))
+  } : {
+    measure: "attempts",
     attempts: toNumber(attempts),
     results: results.map(r => ({
       label: r.label.trim(),
@@ -2087,10 +2157,15 @@ function DrillEditor({
     tags,
     cutoffs: cutoffs.map(toNumber)
   };
-  if (retakeEnabled) config.retake_label = retakeLabel.trim();
+  if (!timed && retakeEnabled) config.retake_label = retakeLabel.trim();
   const problems = drillProblems(name, attributeId, config);
   const configOk = drillProblems("ok", "ok", config).length === 0;
-  const ranges = configOk ? drillLevelRanges(config) : null;
+  const ranges = configOk && !timed ? drillLevelRanges(config) : null;
+  const timeRanges = configOk && timed ? drillTimeRanges(config.time_cutoffs) : null;
+  const updateTimeCutoff = (i, field, value) => setTimeCutoffs(timeCutoffs.map((t, j) => j === i ? {
+    ...t,
+    [field]: value.replace(/\D/g, "")
+  } : t));
   const squadAttributes = groupByCategory(attributesBySquad[squadId] || []).flatMap(g => g.items);
   const addTag = () => {
     const t = tagDraft.trim();
@@ -2118,6 +2193,148 @@ function DrillEditor({
   }, label), ...children);
   const pctText = r => r.level === 1 ? `under ${r.toPct}%` : r.level === 5 ? `${r.fromPct}% and over` : `${r.fromPct}–${r.toPct - 1}%`;
   const ptsText = r => r.empty ? "no total lands here" : r.fromPts === r.toPts ? `${r.fromPts} pts` : `${r.fromPts}–${r.toPts} pts`;
+  const levelPill = level => {
+    const lvl = levelFor(level);
+    return /*#__PURE__*/React.createElement("span", {
+      style: {
+        width: 92,
+        flexShrink: 0,
+        textAlign: "center",
+        fontSize: 12,
+        fontWeight: 700,
+        padding: "3px 8px",
+        borderRadius: 999,
+        background: lvl.color,
+        color: lvl.text
+      }
+    }, lvl.label);
+  };
+  const measureToggle = /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    role: "radiogroup",
+    "aria-label": "How this drill is measured",
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 8
+    }
+  }, [["attempts", "Attempts"], ["time", "Time"]].map(([value, label]) => {
+    const on = measure === value;
+    return /*#__PURE__*/React.createElement("button", {
+      key: value,
+      role: "radio",
+      "aria-checked": on,
+      onClick: () => setMeasure(value),
+      className: "press",
+      style: {
+        ...secondaryButtonStyle,
+        minHeight: 48,
+        background: on ? TOKENS.turf : "#fff",
+        borderColor: on ? TOKENS.turf : "rgba(11,61,98,0.2)",
+        color: on ? TOKENS.chalk : TOKENS.turf,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 6
+      }
+    }, on && /*#__PURE__*/React.createElement(Check, {
+      size: 14
+    }), label);
+  })), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#6B7C8C",
+      margin: "10px 0 0"
+    }
+  }, timed ? "The coach enters one time per player (e.g. a 1km run). Lower is better." : "The coach taps a result for each attempt, and the points are added up."));
+  const minSecBox = (value, onChange, label) => /*#__PURE__*/React.createElement("input", {
+    value,
+    onChange: e => onChange(e.target.value),
+    inputMode: "numeric",
+    pattern: "[0-9]*",
+    maxLength: 2,
+    "aria-label": label,
+    style: {
+      ...inputStyle,
+      width: 52,
+      textAlign: "center",
+      padding: "8px 4px"
+    }
+  });
+  const timeCutoffsSection = section("Level cut-offs", /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#6B7C8C",
+      margin: "-4px 0 10px"
+    }
+  }, "The slowest time (minutes : seconds) that still gets each level. Anything slower than ", SCORE_SCALE[1].label, " is ", SCORE_SCALE[0].label, "."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 8
+    }
+  }, [3, 2, 1, 0].map(i => {
+    const l = SCORE_SCALE[i + 1];
+    const t = timeCutoffs[i];
+    return /*#__PURE__*/React.createElement("div", {
+      key: l.value,
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        flex: 1,
+        fontSize: 14,
+        color: TOKENS.turf
+      }
+    }, l.value, " ", l.label, " up to"), minSecBox(t.min, v => updateTimeCutoff(i, "min", v), `${l.label} cut-off minutes`), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 16,
+        fontWeight: 700,
+        color: TOKENS.turf
+      }
+    }, ":"), minSecBox(t.sec, v => updateTimeCutoff(i, "sec", v), `${l.label} cut-off seconds`));
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 16,
+      paddingTop: 12,
+      borderTop: "1px solid rgba(11,61,98,0.08)"
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      fontWeight: 600,
+      textTransform: "uppercase",
+      margin: "0 0 8px",
+      color: "#6B7C8C"
+    }
+  }, "Preview"), timeRanges ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 6
+    }
+  }, timeRanges.slice().reverse().map(r => /*#__PURE__*/React.createElement("div", {
+    key: r.level,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      fontSize: 13,
+      color: TOKENS.turf
+    }
+  }, levelPill(r.level), /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }, r.text)))) : /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: "#6B7C8C",
+      margin: 0
+    }
+  }, "Fix the times above to see the preview.")));
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
     title: drill ? "EDIT DRILL" : "NEW DRILL",
     subtitle: (squads.find(s => s.id === squadId) || {}).name,
@@ -2174,7 +2391,7 @@ function DrillEditor({
   }, "Choose an attribute…"), squadAttributes.map(a => /*#__PURE__*/React.createElement("option", {
     key: a.id,
     value: a.id
-  }, CATEGORY_LABELS[a.category || "attitude"], ": ", a.name))))), section("Number of attempts", /*#__PURE__*/React.createElement("div", {
+  }, CATEGORY_LABELS[a.category || "attitude"], ": ", a.name))))), section("Measurement", measureToggle), !timed && section("Number of attempts",/*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -2212,7 +2429,7 @@ function DrillEditor({
       fontSize: 20
     },
     "aria-label": "One more attempt"
-  }, "+"))), section("Result buttons", /*#__PURE__*/React.createElement("p", {
+  }, "+"))), !timed && section("Result buttons",/*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: "#6B7C8C",
@@ -2289,7 +2506,7 @@ function DrillEditor({
     }
   }, /*#__PURE__*/React.createElement(Plus, {
     size: 16
-  }), " Add result"))), section("Retake", /*#__PURE__*/React.createElement("label", {
+  }), " Add result"))), !timed && section("Retake",/*#__PURE__*/React.createElement("label", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -2376,7 +2593,7 @@ function DrillEditor({
     onClick: addTag,
     className: "press",
     style: secondaryButtonStyle
-  }, "Add"))), section("Level cut-offs", /*#__PURE__*/React.createElement("p", {
+  }, "Add"))), timed && timeCutoffsSection, !timed && section("Level cut-offs",/*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: "#6B7C8C",
@@ -2513,7 +2730,266 @@ function DrillEditor({
 
 /* ---------------- Run a drill ---------------- */
 
-function DrillRunner({
+function DrillRunner(props) {
+  return isTimedDrill(props.drill.config) ? /*#__PURE__*/React.createElement(TimeDrillRunner, props) : /*#__PURE__*/React.createElement(AttemptDrillRunner, props);
+}
+
+// Shared by both runners: optional quick tags.
+function DrillTagPicker({
+  options,
+  tags,
+  setTags
+}) {
+  if (!options.length) return null;
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      ...sectionLabelStyle,
+      marginBottom: 8
+    }
+  }, "Tags (optional)"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 8
+    }
+  }, options.map(t => {
+    const on = tags.includes(t);
+    return /*#__PURE__*/React.createElement("button", {
+      key: t,
+      onClick: () => setTags(on ? tags.filter(x => x !== t) : [...tags, t]),
+      className: "press",
+      "aria-pressed": on,
+      style: {
+        ...secondaryButtonStyle,
+        borderRadius: 999,
+        background: on ? TOKENS.turf : "#fff",
+        borderColor: on ? TOKENS.turf : "rgba(11,61,98,0.2)",
+        color: on ? TOKENS.chalk : TOKENS.turf,
+        display: "flex",
+        alignItems: "center",
+        gap: 6
+      }
+    }, on && /*#__PURE__*/React.createElement(Check, {
+      size: 14
+    }), t);
+  })));
+}
+
+/* Timed drill: one time per player. Session date, big minutes and
+   seconds boxes, a live level preview, then tags, note and Save. */
+function TimeDrillRunner({
+  drill,
+  player,
+  attributeName,
+  onBack,
+  onSave,
+  onSignOut,
+  saving
+}) {
+  const config = drill.config;
+  const [min, setMin] = useState("");
+  const [sec, setSec] = useState("");
+  const [tags, setTags] = useState([]);
+  const [note, setNote] = useState("");
+  const today = todayLocalDate();
+  const [sessionDate, setSessionDate] = useState(today);
+  const secRef = useRef(null);
+  const dateProblem = !sessionDate ? "Choose the session date." : sessionDate > today ? "The session date can't be in the future." : null;
+  const entered = min !== "" || sec !== "";
+  const seconds = minSecToSeconds(min, sec);
+  const timeProblem = !entered ? null : Number(sec) > 59 ? "Seconds must be from 0 to 59." : !(seconds > 0) ? "Enter a time more than 0:00." : seconds >= MAX_TIME_SECONDS ? "That time is too long." : null;
+  const timeOk = entered && !timeProblem;
+  const level = timeOk ? drillTimeLevel(seconds, config.time_cutoffs) : null;
+  const lvl = levelFor(level);
+  const firstName = player.name.trim().split(/\s+/)[0];
+  const leave = () => {
+    if ((entered || note.trim() || tags.length) && !window.confirm("Leave this drill? The time entered won't be saved.")) return;
+    onBack();
+  };
+  const digits = v => v.replace(/\D/g, "").slice(0, 2);
+  const bigBox = (id, value, onChange, label, ref, onKeyDown) => /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      gap: 4
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    id,
+    ref,
+    value,
+    onChange: e => onChange(digits(e.target.value)),
+    onKeyDown,
+    inputMode: "numeric",
+    pattern: "[0-9]*",
+    autoComplete: "off",
+    placeholder: id.endsWith("sec") ? "00" : "0",
+    "aria-label": label,
+    style: {
+      width: 104,
+      height: 88,
+      fontSize: 48,
+      fontWeight: 700,
+      textAlign: "center",
+      borderRadius: 12,
+      border: `2px solid ${TOKENS.turf}`,
+      color: TOKENS.turf,
+      background: "#fff",
+      fontVariantNumeric: "tabular-nums"
+    }
+  }), /*#__PURE__*/React.createElement("label", {
+    htmlFor: id,
+    style: {
+      fontSize: 12,
+      color: "#6B7C8C",
+      fontWeight: 600
+    }
+  }, label));
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
+    title: drill.name,
+    subtitle: `${player.name} · ${attributeName}`,
+    onBack: leave,
+    onSignOut: onSignOut
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 16,
+      display: "flex",
+      flexDirection: "column",
+      gap: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    htmlFor: "drill-session-date",
+    style: {
+      ...sectionLabelStyle,
+      display: "block",
+      marginBottom: 8
+    }
+  }, "Session date"), /*#__PURE__*/React.createElement("input", {
+    id: "drill-session-date",
+    type: "date",
+    value: sessionDate,
+    max: today,
+    onChange: e => setSessionDate(e.target.value),
+    style: inputStyle
+  }), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      margin: "6px 0 0",
+      color: dateProblem ? "#B3261E" : "#6B7C8C"
+    },
+    role: dateProblem ? "alert" : undefined
+  }, dateProblem || "Change this if you're entering a past session, e.g. from paper.")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...cardBase,
+      padding: 16,
+      textAlign: "center"
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      ...sectionLabelStyle,
+      marginBottom: 12
+    }
+  }, "Time"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "center",
+      alignItems: "flex-start",
+      gap: 8
+    }
+  }, bigBox("drill-time-min", min, v => {
+    setMin(v);
+    // Two digits of minutes typed: move on to seconds.
+    if (v.length === 2 && secRef.current) secRef.current.focus();
+  }, "Minutes"), /*#__PURE__*/React.createElement("span", {
+    "aria-hidden": "true",
+    style: {
+      fontSize: 48,
+      fontWeight: 700,
+      color: TOKENS.turf,
+      lineHeight: "88px"
+    }
+  }, ":"), bigBox("drill-time-sec", sec, setSec, "Seconds", secRef)), /*#__PURE__*/React.createElement("div", {
+    "aria-live": "polite",
+    style: {
+      marginTop: 16
+    }
+  }, timeProblem ? /*#__PURE__*/React.createElement("p", {
+    role: "alert",
+    style: {
+      fontSize: 13,
+      color: "#B3261E",
+      margin: 0
+    }
+  }, timeProblem) : timeOk ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "inline-block",
+      fontSize: 14,
+      fontWeight: 700,
+      padding: "6px 14px",
+      borderRadius: 999,
+      background: lvl.color,
+      color: lvl.text,
+      marginBottom: 12
+    }
+  }, fmtDuration(seconds), " · ", level, " ", lvl.label), /*#__PURE__*/React.createElement(SegmentBar, {
+    value: level
+  })) : /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: "#6B7C8C",
+      margin: 0
+    }
+  }, SCORE_SCALE[4].label, " is ", fmtDuration(config.time_cutoffs[3]), " or under."))), /*#__PURE__*/React.createElement(DrillTagPicker, {
+    options: config.tags,
+    tags: tags,
+    setTags: setTags
+  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    htmlFor: "drill-note",
+    style: {
+      ...sectionLabelStyle,
+      display: "block",
+      marginBottom: 8
+    }
+  }, "Note (optional)"), /*#__PURE__*/React.createElement("textarea", {
+    id: "drill-note",
+    placeholder: "Anything worth remembering from this session",
+    value: note,
+    onChange: e => setNote(e.target.value),
+    rows: 3,
+    style: {
+      width: "100%",
+      fontSize: 14,
+      borderRadius: 8,
+      border: "1px solid rgba(11,61,98,0.15)",
+      padding: 12,
+      resize: "none"
+    }
+  })), timeOk && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#6B7C8C",
+      margin: 0
+    }
+  }, "Saving also sets ", attributeName, " to ", /*#__PURE__*/React.createElement("strong", null, lvl.label), " on ", player.name, "'s passport", sessionDate && sessionDate !== today && !dateProblem ? `, dated ${fmtDate(`${sessionDate}T12:00:00`)}` : "", "."), /*#__PURE__*/React.createElement("button", {
+    onClick: () => onSave({
+      drill_id: drill.id,
+      player_id: player.id,
+      time_seconds: seconds,
+      tags,
+      note: note.trim() || null,
+      level,
+      session_date: sessionDate
+    }),
+    disabled: saving || !timeOk || !!dateProblem,
+    className: "press",
+    style: {
+      ...primaryButtonStyle,
+      opacity: saving || !timeOk || dateProblem ? 0.5 : 1
+    }
+  }, saving ? "Saving…" : `Save time for ${firstName}`)));
+}
+
+function AttemptDrillRunner({
   drill,
   player,
   attributeName,
@@ -3022,6 +3498,16 @@ const PREVIEW_DRILLS = [{
     tags: ["Weak side", "Under pressure", "Rushed"],
     cutoffs: [40, 60, 75, 90]
   }
+}, {
+  id: "pd2",
+  squad_id: "preview-squad",
+  name: "Shuttle run",
+  attribute_id: "pa11",
+  config: {
+    measure: "time",
+    tags: ["Wet pitch", "Headwind"],
+    time_cutoffs: [80, 72, 66, 60]
+  }
 }];
 function makePreviewPlayers() {
   return [{
@@ -3343,8 +3829,12 @@ function Dashboard({
     } = await sb.from("drill_entries").insert({
       drill_id: entry.drill_id,
       player_id: entry.player_id,
-      attempts: entry.attempts,
-      retakes: entry.retakes,
+      ...(isTimedDrill(drill.config) ? {
+        time_seconds: entry.time_seconds
+      } : {
+        attempts: entry.attempts,
+        retakes: entry.retakes
+      }),
       tags: entry.tags,
       note: entry.note,
       // Today: leave it to the database ("now"). An earlier session:
