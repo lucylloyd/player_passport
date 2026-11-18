@@ -4076,6 +4076,7 @@ function AttemptDrillRunner({
       drill_id: drill.id,
       player_id: player.id,
       attempts: attempts.map(a => a.points),
+      attempt_labels: attempts.map(a => a.label),
       retakes,
       tags,
       note: note.trim() || null,
@@ -4782,6 +4783,7 @@ function Dashboard({
         total: timed ? null : entry.total,
         time_seconds: timed ? entry.time_seconds : null,
         group_totals: timed ? null : drillGroupTotals(drill.config, entry.attempts),
+        attempt_labels: timed ? null : entry.attempt_labels,
         level: entry.level,
         tags: entry.tags,
         note: entry.note,
@@ -4793,15 +4795,16 @@ function Dashboard({
     }
     setSaving(true);
     // The database recalculates total and level, and adds the matching score.
-    const {
-      error
-    } = await sb.from("drill_entries").insert({
+    const row = {
       drill_id: entry.drill_id,
       player_id: entry.player_id,
       ...(isTimedDrill(drill.config) ? {
         time_seconds: entry.time_seconds
       } : {
         attempts: entry.attempts,
+        // Outcome name of each attempt, e.g. "Goal", so past runs can be
+        // re-scored exactly if the drill's points ever change.
+        attempt_labels: entry.attempt_labels,
         retakes: entry.retakes
       }),
       tags: entry.tags,
@@ -4811,7 +4814,22 @@ function Dashboard({
       ...(entry.session_date !== todayLocalDate() && {
         recorded_at: sessionTimestamp(entry.session_date)
       })
-    });
+    };
+    let {
+      error
+    } = await sb.from("drill_entries").insert(row);
+    // attempt_labels only exists once the outcomes migration has run.
+    // Without it, save the run without names (the database fills them
+    // in from the points once the migration runs).
+    if (error && "attempt_labels" in row && /attempt_labels/.test(error.message || "")) {
+      const {
+        attempt_labels,
+        ...withoutNames
+      } = row;
+      ({
+        error
+      } = await sb.from("drill_entries").insert(withoutNames));
+    }
     setSaving(false);
     if (error) {
       alert("Couldn't save that drill result: " + error.message);
