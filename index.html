@@ -714,6 +714,24 @@ function drillGroupTotals(config, attemptPoints) {
 function fmtGroupTotals(groupTotals) {
   return groupTotals.map(g => `${g.label}: ${g.total} / ${g.max}`).join(" · ");
 }
+// The gap between the strongest and weakest group, in percentage points
+// of each group's own maximum (so groups of different sizes compare fairly).
+// 13/15 vs 8/15 → 33. Null with fewer than 2 groups.
+function groupGapPct(groupTotals) {
+  if (!groupTotals || groupTotals.length < 2) return null;
+  const pcts = groupTotals.map(g => g.max > 0 ? g.total * 100 / g.max : 0);
+  return Math.round(Math.max(...pcts) - Math.min(...pcts));
+}
+// Short card line: "Dominant 13/15 · Non-dominant 8/15 · gap 33%"
+function fmtGroupLine(groupTotals) {
+  const gap = groupGapPct(groupTotals);
+  return groupTotals.map(g => `${g.label} ${g.total}/${g.max}`).join(" · ") + (gap ? ` · gap ${gap}%` : "");
+}
+/* Line colours for drill trend charts, one per group, in this fixed order.
+   From the validated categorical palette (dataviz skill); the first two
+   (blue, orange) pass colour-blind and contrast checks on white. They're
+   kept separate from the level colours so a line can't be read as a level. */
+const DRILL_SERIES_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"];
 // How a drill is run, for lists: "Timed", "Left × 5, Right × 5" or "5 attempts".
 function drillSummary(config) {
   if (isTimedDrill(config)) return "Timed";
@@ -1064,6 +1082,372 @@ function LevelKey() {
       marginTop: 3
     }
   }, /*#__PURE__*/React.createElement("span", null, first.label), /*#__PURE__*/React.createElement("span", null, last.label)));
+}
+
+/* ---------------- Drill detail (opened-out attribute card) ---------------- */
+
+// What one run scored, without the date: "21 / 30" or "1:04".
+function fmtDrillResult(entry, drill) {
+  if (entry.time_seconds != null) return fmtDuration(Number(entry.time_seconds));
+  if (entry.total != null && drill && !isTimedDrill(drill.config)) return `${entry.total} / ${drillMaxTotal(drill.config)}`;
+  return levelFor(entry.level).label;
+}
+
+/* Trend over a drill's recent runs (oldest → newest, up to 8).
+   - Grouped drill: one line per group, as % of that group's maximum.
+   - Other attempts drill: one line, total as % of the maximum.
+   - Timed drill: one line of times, faster higher up.
+   Tap or hover a run to see its values; the latest run shows by default.
+   The recent-runs list underneath has every value, so nothing is hidden. */
+function DrillTrendChart({
+  drill,
+  entries
+}) {
+  const runs = entries.slice(-8);
+  const [active, setActive] = useState(runs.length - 1);
+  const timed = isTimedDrill(drill.config);
+  const groups = drillGroups(drill.config);
+  const groupSeries = groups && runs.every(e => Array.isArray(e.group_totals) && e.group_totals.length === groups.length);
+  const max = timed ? null : drillMaxTotal(drill.config);
+  // Each series: {label, color, values: [number|null], text: [string]}
+  const series = timed ? [{
+    label: "Time",
+    color: DRILL_SERIES_COLORS[0],
+    values: runs.map(e => e.time_seconds != null ? Number(e.time_seconds) : null),
+    text: runs.map(e => e.time_seconds != null ? fmtDuration(Number(e.time_seconds)) : "–")
+  }] : groupSeries ? groups.map((g, gi) => ({
+    label: g.label,
+    color: DRILL_SERIES_COLORS[gi % DRILL_SERIES_COLORS.length],
+    values: runs.map(e => {
+      const t = e.group_totals[gi];
+      return t.max > 0 ? t.total * 100 / t.max : 0;
+    }),
+    text: runs.map(e => `${e.group_totals[gi].total}/${e.group_totals[gi].max}`)
+  })) : [{
+    label: "Total",
+    color: DRILL_SERIES_COLORS[0],
+    values: runs.map(e => e.total != null && max ? e.total * 100 / max : null),
+    text: runs.map(e => e.total != null ? `${e.total}/${max}` : "–")
+  }];
+
+  // Geometry (SVG units; the SVG scales to the card's width).
+  const W = 320,
+    H = 120,
+    L = 34,
+    R = 46,
+    T = 10,
+    B = 22;
+  const plotW = W - L - R,
+    plotH = H - T - B;
+  const x = i => runs.length === 1 ? L + plotW / 2 : L + i * plotW / (runs.length - 1);
+  let y, ticks;
+  if (timed) {
+    const vals = series[0].values.filter(v => v != null);
+    let lo = Math.min(...vals),
+      hi = Math.max(...vals);
+    if (hi - lo < 4) {
+      lo -= 2;
+      hi += 2;
+    }
+    // Faster (smaller) times at the top.
+    y = v => T + (v - lo) / (hi - lo) * plotH;
+    ticks = [{
+      v: lo,
+      label: fmtDuration(lo)
+    }, {
+      v: hi,
+      label: fmtDuration(hi)
+    }];
+  } else {
+    y = v => T + (100 - v) / 100 * plotH;
+    ticks = [0, 50, 100].map(v => ({
+      v,
+      label: `${v}%`
+    }));
+  }
+  // End labels: keep at least 12 units apart so they never overlap.
+  const ends = series.map((s, si) => ({
+    si,
+    y: y(s.values[runs.length - 1] ?? 0)
+  })).sort((a, b) => a.y - b.y);
+  for (let k = 1; k < ends.length; k++) if (ends[k].y - ends[k - 1].y < 12) ends[k].y = ends[k - 1].y + 12;
+  const endY = {};
+  ends.forEach(e => endY[e.si] = Math.min(H - B, Math.max(T + 4, e.y)));
+  const path = s => s.values.map((v, i) => v == null ? null : `${x(i)},${y(v)}`).filter(Boolean).join(" ");
+  const step = runs.length > 1 ? plotW / (runs.length - 1) : plotW;
+  const a = runs[active];
+  const caption = timed ? "Time · faster is higher" : groupSeries ? "Each side as % of its maximum" : "Total as % of the maximum";
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      alignItems: "center",
+      gap: "4px 12px",
+      fontSize: 11,
+      color: "#4A5B68",
+      marginBottom: 4
+    }
+  }, /*#__PURE__*/React.createElement("span", null, caption), series.length > 1 && series.map(s => /*#__PURE__*/React.createElement("span", {
+    key: s.label,
+    style: {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 4
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    "aria-hidden": "true",
+    style: {
+      width: 14,
+      height: 2,
+      borderRadius: 1,
+      background: s.color
+    }
+  }), s.label))), /*#__PURE__*/React.createElement("div", {
+    "aria-live": "polite",
+    style: {
+      fontSize: 12,
+      color: "#4A5B68",
+      minHeight: 18,
+      marginBottom: 2
+    }
+  }, a && /*#__PURE__*/React.createElement(React.Fragment, null, fmtShortDate(a.recorded_at), series.map(s => /*#__PURE__*/React.createElement("span", {
+    key: s.label
+  }, " · ", /*#__PURE__*/React.createElement("strong", {
+    style: {
+      color: TOKENS.turf
+    }
+  }, s.text[active]), series.length > 1 ? ` ${s.label}` : "")), " · ", levelFor(a.level).label)), /*#__PURE__*/React.createElement("svg", {
+    viewBox: `0 0 ${W} ${H}`,
+    width: "100%",
+    role: "img",
+    "aria-label": `${drill.name}: ${runs.length} runs. ` + runs.map((e, i) => `${fmtShortDate(e.recorded_at)} ${series.map(s => (series.length > 1 ? s.label + " " : "") + s.text[i]).join(", ")}`).join("; "),
+    style: {
+      display: "block",
+      overflow: "visible"
+    }
+  }, ticks.map(t => /*#__PURE__*/React.createElement("g", {
+    key: t.v
+  }, /*#__PURE__*/React.createElement("line", {
+    x1: L,
+    x2: W - R,
+    y1: y(t.v),
+    y2: y(t.v),
+    stroke: "rgba(11,61,98,0.10)",
+    strokeWidth: 1
+  }), /*#__PURE__*/React.createElement("text", {
+    x: L - 6,
+    y: y(t.v) + 3.5,
+    textAnchor: "end",
+    fontSize: 10,
+    fill: "#4A5B68"
+  }, t.label))), a && /*#__PURE__*/React.createElement("line", {
+    x1: x(active),
+    x2: x(active),
+    y1: T,
+    y2: H - B,
+    stroke: "rgba(11,61,98,0.25)",
+    strokeWidth: 1
+  }), series.map(s => /*#__PURE__*/React.createElement("polyline", {
+    key: s.label,
+    points: path(s),
+    fill: "none",
+    stroke: s.color,
+    strokeWidth: 2,
+    strokeLinejoin: "round",
+    strokeLinecap: "round"
+  })), series.map(s => s.values.map((v, i) => v == null ? null : /*#__PURE__*/React.createElement("circle", {
+    key: `${s.label}-${i}`,
+    cx: x(i),
+    cy: y(v),
+    r: i === active ? 5 : 4,
+    fill: s.color,
+    stroke: "#fff",
+    strokeWidth: 2
+  }))), series.map((s, si) => /*#__PURE__*/React.createElement("text", {
+    key: `end-${s.label}`,
+    x: x(runs.length - 1) + 8,
+    y: endY[si] + 3.5,
+    fontSize: 10,
+    fontWeight: 700,
+    fill: TOKENS.turf
+  }, s.text[runs.length - 1])), /*#__PURE__*/React.createElement("text", {
+    x: x(0),
+    y: H - 6,
+    textAnchor: runs.length === 1 ? "middle" : "start",
+    fontSize: 10,
+    fill: "#4A5B68"
+  }, fmtShortDate(runs[0].recorded_at)), runs.length > 1 && /*#__PURE__*/React.createElement("text", {
+    x: x(runs.length - 1),
+    y: H - 6,
+    textAnchor: "end",
+    fontSize: 10,
+    fill: "#4A5B68"
+  }, fmtShortDate(runs[runs.length - 1].recorded_at)), runs.map((e, i) => /*#__PURE__*/React.createElement("rect", {
+    key: `hit-${i}`,
+    x: x(i) - Math.max(step, 24) / 2,
+    y: 0,
+    width: Math.max(step, 24),
+    height: H,
+    fill: "transparent",
+    tabIndex: 0,
+    "aria-label": `${fmtShortDate(e.recorded_at)}: ${series.map(s => (series.length > 1 ? s.label + " " : "") + s.text[i]).join(", ")}`,
+    onMouseEnter: () => setActive(i),
+    onFocus: () => setActive(i),
+    onClick: () => setActive(i),
+    style: {
+      cursor: "pointer",
+      outline: "none"
+    }
+  }))));
+}
+
+/* One drill's results inside an opened-out attribute card: the latest
+   run's sides (grouped drills), the trend chart (3+ runs) and the last
+   5 runs with their notes and tags. */
+function DrillResultsPanel({
+  drill,
+  entries
+}) {
+  const latest = entries[entries.length - 1];
+  const recent = entries.slice(-5).reverse();
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      fontWeight: 600,
+      textTransform: "uppercase",
+      margin: "0 0 8px",
+      color: "#4A5B68"
+    }
+  }, drill.name), latest.group_totals && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 6,
+      marginBottom: 12
+    }
+  }, latest.group_totals.map((g, gi) => /*#__PURE__*/React.createElement("div", {
+    key: g.label,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      fontSize: 12,
+      color: TOKENS.turf
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "truncate",
+    style: {
+      width: 96,
+      flexShrink: 0
+    }
+  }, g.label), /*#__PURE__*/React.createElement("div", {
+    "aria-hidden": "true",
+    style: {
+      flex: 1,
+      height: 8,
+      borderRadius: 999,
+      background: "rgba(11,61,98,0.10)",
+      overflow: "hidden"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: `${g.max > 0 ? g.total * 100 / g.max : 0}%`,
+      height: "100%",
+      borderRadius: 999,
+      background: DRILL_SERIES_COLORS[gi % DRILL_SERIES_COLORS.length]
+    }
+  })), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      minWidth: 40,
+      textAlign: "right",
+      fontVariantNumeric: "tabular-nums"
+    }
+  }, g.total, "/", g.max))), groupGapPct(latest.group_totals) ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "#4A5B68"
+    }
+  }, "Gap between sides: ", /*#__PURE__*/React.createElement("strong", {
+    style: {
+      color: TOKENS.turf
+    }
+  }, groupGapPct(latest.group_totals), "%"), " (latest run)") : null), entries.length >= 3 ? /*#__PURE__*/React.createElement(DrillTrendChart, {
+    drill: drill,
+    entries: entries
+  }) : /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#4A5B68",
+      margin: "0 0 4px"
+    }
+  }, "A trend chart appears after 3 runs."), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      fontWeight: 600,
+      textTransform: "uppercase",
+      margin: "12px 0 6px",
+      color: "#4A5B68"
+    }
+  }, "Recent runs"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 8
+    }
+  }, recent.map((e, i) => {
+    const lvl = levelFor(e.level);
+    const extra = [(e.tags || []).join(", "), e.note].filter(Boolean).join(" · ");
+    return /*#__PURE__*/React.createElement("div", {
+      key: `${e.recorded_at}-${i}`,
+      style: {
+        fontSize: 12,
+        color: TOKENS.turf
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "#4A5B68",
+        width: 46,
+        flexShrink: 0
+      }
+    }, fmtShortDate(e.recorded_at)), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 700,
+        fontVariantNumeric: "tabular-nums"
+      }
+    }, fmtDrillResult(e, drill)), /*#__PURE__*/React.createElement("span", {
+      style: {
+        marginLeft: "auto",
+        fontSize: 11,
+        fontWeight: 700,
+        padding: "2px 8px",
+        borderRadius: 999,
+        background: lvl.color,
+        color: lvl.text
+      }
+    }, lvl.label)), e.group_totals && /*#__PURE__*/React.createElement("div", {
+      style: {
+        color: "#4A5B68",
+        marginLeft: 54
+      }
+    }, e.group_totals.map(g => `${g.label} ${g.total}/${g.max}`).join(" · ")), extra &&/*#__PURE__*/React.createElement("div", {
+      style: {
+        color: "#4A5B68",
+        marginLeft: 54,
+        fontStyle: "italic"
+      }
+    }, extra));
+  })));
 }
 
 /* Position + role tags shown on a player's roster tile */
@@ -1918,7 +2302,13 @@ function PlayerDetail({
         }
       }, latest ? `Latest: ${fmtDrillEntry(latest, skillDrills.find(d => d.id === latest.drill_id))}` : rec.value ? "" : "No drill results yet"), skillDrills.length === 1 ? runDrillButton(() => onRunDrill(skillDrills[0].id), " Run drill") : runDrillButton(() => setDrillMenuFor(menuOpen ? null : skill.id), " Run drill", {
         open: menuOpen
-      })), menuOpen && /*#__PURE__*/React.createElement("div", {
+      })), latest && latest.group_totals && /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 12,
+          color: "#4A5B68",
+          marginTop: 4
+        }
+      }, fmtGroupLine(latest.group_totals)), menuOpen &&/*#__PURE__*/React.createElement("div", {
         role: "menu",
         "aria-label": `Drills for ${skill.name}`,
         style: {
@@ -2007,7 +2397,14 @@ function PlayerDetail({
           padding: "4px 16px 16px",
           borderTop: "1px solid rgba(11,61,98,0.08)"
         }
-      }, hasDrill && rec.history.length === 0 && /*#__PURE__*/React.createElement("p", {
+      }, hasDrill && skillDrills.map(d => {
+        const runs = drillEntries.filter(e => e.drill_id === d.id);
+        return runs.length ? /*#__PURE__*/React.createElement(DrillResultsPanel, {
+          key: d.id,
+          drill: d,
+          entries: runs
+        }) : null;
+      }), hasDrill && rec.history.length === 0 && /*#__PURE__*/React.createElement("p", {
         style: {
           fontSize: 12,
           color: "#6B7C8C",
@@ -3930,9 +4327,77 @@ const PREVIEW_DRILLS = [{
     tags: [],
     cutoffs: [30, 50, 70, 80]
   }
+}, {
+  // Like the lacrosse dominant / non-dominant hand drill.
+  id: "pd4",
+  squad_id: "preview-squad",
+  name: "Shooting: dominant / non-dominant",
+  attribute_id: "pa15",
+  config: {
+    measure: "attempts",
+    attempts: 10,
+    groups: [{
+      label: "Dominant",
+      attempts: 5
+    }, {
+      label: "Non-dominant",
+      attempts: 5
+    }],
+    results: [{
+      label: "Goal",
+      points: 3
+    }, {
+      label: "On target",
+      points: 1
+    }, {
+      label: "Miss",
+      points: 0
+    }],
+    retake_enabled: false,
+    retake_label: "Retake",
+    tags: ["Under pressure", "Rushed"],
+    cutoffs: [30, 50, 70, 80]
+  }
 }];
-// Past drill results for the demo players, oldest first.
-const PREVIEW_DRILL_ENTRIES = [{
+// Fake grouped run for the demo data.
+const previewShootingRun = (date, dom, nonDom, level, tags, note) => ({
+  drill_id: "pd4",
+  player_id: "pp1",
+  total: dom + nonDom,
+  time_seconds: null,
+  group_totals: [{
+    label: "Dominant",
+    total: dom,
+    max: 15
+  }, {
+    label: "Non-dominant",
+    total: nonDom,
+    max: 15
+  }],
+  level,
+  tags,
+  note,
+  recorded_at: `${date}T17:30:00`
+});
+// Past drill results for the demo players, sorted oldest first below.
+const PREVIEW_DRILL_ENTRIES = [previewShootingRun("2026-10-20", 12, 5, 3, ["Rushed"], "Snatching at shots on the non-dominant side"), previewShootingRun("2026-10-27", 13, 6, 3, [], null), previewShootingRun("2026-11-03", 12, 8, 3, ["Under pressure"], null), previewShootingRun("2026-11-12", 13, 8, 4, [], "Non-dominant much more controlled"), {
+  drill_id: "pd2",
+  player_id: "pp1",
+  total: null,
+  time_seconds: 75,
+  group_totals: null,
+  level: 2,
+  recorded_at: "2026-10-14T17:00:00"
+}, {
+  drill_id: "pd2",
+  player_id: "pp1",
+  total: null,
+  time_seconds: 70,
+  group_totals: null,
+  level: 3,
+  tags: ["Wet pitch"],
+  recorded_at: "2026-10-28T17:00:00"
+}, {
   drill_id: "pd1",
   player_id: "pp1",
   total: 13,
@@ -3964,7 +4429,7 @@ const PREVIEW_DRILL_ENTRIES = [{
   }],
   level: 4,
   recorded_at: "2026-11-12T12:00:00"
-}];
+}].sort((a, b) => new Date(a.recorded_at) - new Date(b.recorded_at));
 function makePreviewPlayers() {
   return [{
     id: "pp1",
@@ -3995,6 +4460,14 @@ function makePreviewPlayers() {
       },
       pa14: {
         value: 2,
+        history: []
+      },
+      pa15: {
+        value: 4,
+        history: []
+      },
+      pa11: {
+        value: 3,
         history: []
       }
     },
@@ -4163,11 +4636,11 @@ function Dashboard({
         let {
           data,
           error
-        } = await fetchEntries("drill_id, player_id, total, time_seconds, group_totals, level, recorded_at");
+        } = await fetchEntries("drill_id, player_id, total, time_seconds, group_totals, level, tags, note, recorded_at");
         if (error) ({
           data,
           error
-        } = await fetchEntries("drill_id, player_id, total, time_seconds, level, recorded_at"));
+        } = await fetchEntries("drill_id, player_id, total, time_seconds, level, tags, note, recorded_at"));
         entryRows = error ? [] : data || [];
       }
       setSquads(squadList);
@@ -4310,6 +4783,8 @@ function Dashboard({
         time_seconds: timed ? entry.time_seconds : null,
         group_totals: timed ? null : drillGroupTotals(drill.config, entry.attempts),
         level: entry.level,
+        tags: entry.tags,
+        note: entry.note,
         recorded_at: entry.session_date !== todayLocalDate() ? sessionTimestamp(entry.session_date) : new Date().toISOString()
       }].sort((a, b) => new Date(a.recorded_at) - new Date(b.recorded_at)));
       await handleScoreChange(entry.player_id, drill.attribute_id, entry.level);
